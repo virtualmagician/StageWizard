@@ -1,8 +1,18 @@
 #!/bin/zsh
-# Build a distributable, dependency-free release zip in ./build.
-# The app uses only system frameworks; this script verifies that before
-# packaging. Ad-hoc signed: on another Mac, right-click → Open the first time.
-set -e
+# Build a distributable release zip in ./build.
+# If a "Developer ID Application" certificate is present, the app is signed
+# with it (hardened runtime) and — if the notary keychain profile
+# "stagewizard-notary" exists — notarized and stapled, so downloads open
+# without the right-click dance. Otherwise falls back to an ad-hoc build.
+#
+# One-time setup for notarization:
+#   1. Accept the current agreements at developer.apple.com/account
+#   2. Xcode → Settings → Accounts → team → Manage Certificates → +
+#      → "Developer ID Application"
+#   3. xcrun notarytool store-credentials stagewizard-notary \
+#        --apple-id <apple-id-email> --team-id Z3U3NKMU2Y \
+#        --password <app-specific password from account.apple.com>
+set -e -o pipefail
 cd "$(dirname "$0")/.."
 
 Tools/build.sh
@@ -22,10 +32,39 @@ if [[ -n "$EXTERNAL" ]]; then
 fi
 echo "OK — system frameworks only."
 
+DEVID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+NOTARIZED=0
+if [[ -n "$DEVID" ]]; then
+  echo ""
+  echo "Signing with: $DEVID (hardened runtime)"
+  xattr -cr "$APP"
+  codesign --force --options runtime --timestamp --sign "$DEVID" "$APP"
+  codesign --verify --strict --deep "$APP"
+
+  if xcrun notarytool history --keychain-profile stagewizard-notary >/dev/null 2>&1; then
+    echo "Submitting to Apple notary service (this can take a few minutes)…"
+    NOTARY_ZIP="build/notary-upload.zip"
+    ditto -c -k --keepParent "$APP" "$NOTARY_ZIP"
+    xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile stagewizard-notary --wait
+    rm -f "$NOTARY_ZIP"
+    xcrun stapler staple "$APP"
+    spctl -a -vv "$APP"
+    NOTARIZED=1
+  else
+    echo "No 'stagewizard-notary' keychain profile — skipping notarization (see header)."
+  fi
+else
+  echo "No Developer ID certificate — shipping ad-hoc signed (right-click → Open)."
+fi
+
 ZIP="build/StageWizard-${VERSION}.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 
 echo ""
-echo "Package: $(pwd)/$ZIP"
+if [[ $NOTARIZED -eq 1 ]]; then
+  echo "Package (signed + notarized + stapled): $(pwd)/$ZIP"
+else
+  echo "Package (NOT notarized): $(pwd)/$ZIP"
+fi
 du -sh "$ZIP"
