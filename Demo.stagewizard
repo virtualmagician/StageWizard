@@ -1,0 +1,223 @@
+{
+  "cues" : [
+    {
+      "armed" : true,
+      "body" : {
+        "endTime" : 6,
+        "fadeInDuration" : 1,
+        "fadeOutDuration" : 1.5,
+        "infiniteLoop" : false,
+        "media" : {
+          "absolutePath" : "TestMedia\/tone-440-10s.wav",
+          "relativePath" : "TestMedia\/tone-440-10s.wav"
+        },
+        "playCount" : 1,
+        "startTime" : 1,
+        "type" : "audio",
+        "volumeDB" : -12
+      },
+      "follow" : {
+        "mode" : "autoContinue",
+        "postWait" : 2
+      },
+      "id" : "A3C79A5C-E6E6-4D37-9B1A-B87DF0FED527",
+      "name" : "Intro tone (fade in, trimmed 1–6 s)",
+      "notes" : "Auto-continues to the video after 2 s.",
+      "number" : "1",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endBehavior" : "holdLastFrame",
+        "endTime" : 8,
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 1,
+        "fillMode" : "fit",
+        "infiniteLoop" : false,
+        "media" : {
+          "absolutePath" : "TestMedia\/countdown-30s.mov",
+          "relativePath" : "TestMedia\/countdown-30s.mov"
+        },
+        "outputGroupID" : "BF501AAD-0F32-4C62-83FE-114416FF11DC",
+        "playCount" : 1,
+        "startTime" : 0,
+        "type" : "video",
+        "volumeDB" : -18
+      },
+      "follow" : {
+        "mode" : "autoFollow"
+      },
+      "id" : "A20D1CCA-D3FC-4BFE-AEE4-70F0DC78082D",
+      "name" : "Countdown video (hold last frame)",
+      "notes" : "Holds its last frame when it reaches 8 s; auto-follow fires cue 3.",
+      "number" : "2",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endTime" : 4,
+        "fadeInDuration" : 0,
+        "fadeOutDuration" : 0,
+        "infiniteLoop" : false,
+        "media" : {
+          "absolutePath" : "TestMedia\/count-60s.wav",
+          "relativePath" : "TestMedia\/count-60s.wav"
+        },
+        "playCount" : 2,
+        "startTime" : 0,
+        "type" : "audio",
+        "volumeDB" : -15
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "7487E8BC-BCBE-46F3-92CC-0E461D05CCE3",
+      "name" : "Count beeps (loop ×2)",
+      "notes" : "",
+      "number" : "3",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "childOffsets" : [
+          "323D70AA-DB4D-46EB-8D5C-2366AC95A526",
+          1.5
+        ],
+        "collapsed" : false,
+        "mode" : "timeline",
+        "type" : "group"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "866B33FB-4895-489E-91C1-8CBDF66D3BB0",
+      "name" : "Timeline: tone + ident video",
+      "notes" : "",
+      "number" : "10",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endTime" : 5,
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 0.5,
+        "infiniteLoop" : false,
+        "media" : {
+          "absolutePath" : "TestMedia\/tone-440-10s.wav",
+          "relativePath" : "TestMedia\/tone-440-10s.wav"
+        },
+        "playCount" : 1,
+        "startTime" : 0,
+        "type" : "audio",
+        "volumeDB" : -20
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "B626A939-EEF7-43A1-8925-A594B2AC6C40",
+      "name" : "Tone bed",
+      "notes" : "",
+      "number" : "10.1",
+      "parentID" : "866B33FB-4895-489E-91C1-8CBDF66D3BB0",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endBehavior" : "stopAndUnload",
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 0.5,
+        "fillMode" : "fit",
+        "infiniteLoop" : false,
+        "media" : {
+          "absolutePath" : "TestMedia\/ident-5s.mov",
+          "relativePath" : "TestMedia\/ident-5s.mov"
+        },
+        "outputGroupID" : "BF501AAD-0F32-4C62-83FE-114416FF11DC",
+        "playCount" : 1,
+        "startTime" : 0,
+        "type" : "video",
+        "volumeDB" : -20
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "323D70AA-DB4D-46EB-8D5C-2366AC95A526",
+      "name" : "Ident video (starts at +1.5 s)",
+      "notes" : "",
+      "number" : "10.2",
+      "parentID" : "866B33FB-4895-489E-91C1-8CBDF66D3BB0",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "curve" : "dbLinear",
+        "duration" : 3,
+        "stopTargetWhenDone" : true,
+        "targetID" : "A20D1CCA-D3FC-4BFE-AEE4-70F0DC78082D",
+        "toOpacity" : 0,
+        "toVolumeDB" : -120,
+        "type" : "fade"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "09D90E14-BA4A-4934-9E39-10F486393778",
+      "name" : "Fade out the video",
+      "notes" : "",
+      "number" : "20",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "curve" : "dbLinear",
+        "fadeOutTime" : 3,
+        "type" : "stop"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "D452E590-FE70-4C0B-A617-88B7A2859AD6",
+      "name" : "Stop everything (3 s fade)",
+      "notes" : "",
+      "number" : "99",
+      "preWait" : 0
+    }
+  ],
+  "formatVersion" : 2,
+  "settings" : {
+    "armAheadCount" : 3,
+    "doubleGOProtection" : 0,
+    "keyBindings" : {
+      "go" : {
+        "keyCode" : 49,
+        "modifiers" : 0
+      },
+      "nextCue" : {
+        "keyCode" : 125,
+        "modifiers" : 0
+      },
+      "previousCue" : {
+        "keyCode" : 126,
+        "modifiers" : 0
+      }
+    },
+    "outputGroups" : [
+      {
+        "displays" : [
+
+        ],
+        "id" : "BF501AAD-0F32-4C62-83FE-114416FF11DC",
+        "name" : "Main"
+      }
+    ],
+    "panicDuration" : 3,
+    "workspaceMode" : "edit"
+  }
+}

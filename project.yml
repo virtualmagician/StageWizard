@@ -1,0 +1,81 @@
+name: StageWizard
+options:
+  bundleIdPrefix: com.marcotempest
+  deploymentTarget:
+    macOS: "26.1"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: false
+    DEAD_CODE_STRIPPING: true
+
+targets:
+  StageWizard:
+    type: application
+    platform: macOS
+    sources:
+      - Sources
+      - path: Support/AppIcon.icns
+        buildPhase: resources
+    postBuildScripts:
+      # The repo lives under Dropbox (File Provider), which tags build
+      # products with xattrs that codesign rejects as "detritus". Strip them
+      # right before signing.
+      - script: 'xattr -cr "${CODESIGNING_FOLDER_PATH}" 2>/dev/null || true'
+        name: Strip cloud-sync xattrs before codesign
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcotempest.stagewizard
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleName: StageWizard
+        CFBundleDisplayName: StageWizard
+        CFBundleIconFile: AppIcon
+        NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.entertainment
+        LSMinimumSystemVersion: "26.1"
+        NSHumanReadableCopyright: "© 2026 Marco Tempest"
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: StageWizard Show
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - com.marcotempest.stagewizard.show
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.marcotempest.stagewizard.show
+            UTTypeDescription: StageWizard Show
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - stagewizard
+          - UTTypeIdentifier: com.marcotempest.stagewizard.cues
+            UTTypeDescription: StageWizard Cues
+            UTTypeConformsTo:
+              - public.json
+
+  StageWizardTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/StageWizardTests
+    postBuildScripts:
+      - script: 'xattr -cr "${CODESIGNING_FOLDER_PATH}" 2>/dev/null || true'
+        name: Strip cloud-sync xattrs before codesign
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+    dependencies:
+      - target: StageWizard
