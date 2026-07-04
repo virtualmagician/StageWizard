@@ -112,4 +112,4 @@ open-source show-control community:
 
 ## License
 
-TBD.
+MIT — see [LICENSE](LICENSE).

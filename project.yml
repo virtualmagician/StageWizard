@@ -39,8 +39,8 @@ targets:
         CFBundleDisplayName: StageWizard
         CFBundleIconFile: AppIcon
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "2"
         LSApplicationCategoryType: public.app-category.entertainment
         LSMinimumSystemVersion: "26.1"
         NSHumanReadableCopyright: "© 2026 Marco Tempest"
