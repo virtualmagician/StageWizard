@@ -8,7 +8,7 @@ public enum StillEngineError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unreadableImage(let name):
-            return "Slide image “\(name)” couldn't be read — reconvert the deck from the inspector."
+            return "Image “\(name)” couldn't be read."
         }
     }
 }
@@ -51,34 +51,56 @@ public final class StillCuePlayer: MediaPlayback {
         targets: [OutputTarget],
         windowFrameOverride: CGRect? = nil
     ) async throws -> StillCuePlayer {
-        // Decode off the main actor — 4K PNGs take tens of ms.
-        let image = try await Task.detached(priority: .userInitiated) { () throws -> CGImage in
-            guard let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, [
-                      kCGImageSourceShouldCache: true,
-                  ] as CFDictionary) else {
-                throw StillEngineError.unreadableImage(imageURL.lastPathComponent)
-            }
-            return image
-        }.value
-        return try StillCuePlayer(
-            body: body, image: image,
+        try StillCuePlayer(
+            fillMode: body.fillMode, geometry: body.geometry,
+            fadeInDuration: body.fadeInDuration,
+            image: try await loadImage(url: imageURL),
             targets: targets, windowFrameOverride: windowFrameOverride
         )
     }
 
+    /// Standalone image cues share the whole pipeline with slides.
+    public static func arm(
+        body: ImageBody,
+        imageURL: URL,
+        targets: [OutputTarget],
+        windowFrameOverride: CGRect? = nil
+    ) async throws -> StillCuePlayer {
+        try StillCuePlayer(
+            fillMode: body.fillMode, geometry: body.geometry,
+            fadeInDuration: body.fadeInDuration,
+            image: try await loadImage(url: imageURL),
+            targets: targets, windowFrameOverride: windowFrameOverride
+        )
+    }
+
+    /// Decode off the main actor — 4K PNGs take tens of ms.
+    private static func loadImage(url: URL) async throws -> CGImage {
+        try await Task.detached(priority: .userInitiated) { () throws -> CGImage in
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, [
+                      kCGImageSourceShouldCache: true,
+                  ] as CFDictionary) else {
+                throw StillEngineError.unreadableImage(url.lastPathComponent)
+            }
+            return image
+        }.value
+    }
+
     private init(
-        body: SlideBody,
+        fillMode: FillMode,
+        geometry: VideoGeometry,
+        fadeInDuration: TimeInterval,
         image: CGImage,
         targets: [OutputTarget],
         windowFrameOverride: CGRect?
     ) throws {
         self.targets = targets
-        self.fillModeSetting = body.fillMode
-        self.geometrySetting = body.geometry
-        self.fadeInDuration = max(0, body.fadeInDuration)
+        self.fillModeSetting = fillMode
+        self.geometrySetting = geometry
+        self.fadeInDuration = max(0, fadeInDuration)
 
-        let gravity: CALayerContentsGravity = switch body.geometry.mode == .custom ? .fit : body.fillMode {
+        let gravity: CALayerContentsGravity = switch geometry.mode == .custom ? .fit : fillMode {
         case .fit: .resizeAspect
         case .fill: .resizeAspectFill
         case .stretch: .resize
@@ -107,11 +129,11 @@ public final class StillCuePlayer: MediaPlayback {
             throw error
         }
         self.layers = built
-        if body.geometry.mode == .custom {
+        if geometry.mode == .custom {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             for layer in built {
-                layer.transform = body.geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
+                layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
             }
             CATransaction.commit()
         }

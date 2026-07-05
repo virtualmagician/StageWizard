@@ -152,6 +152,11 @@ final class ShowDocumentController {
                     body.media.rebase(resolvedURL: resolved, showFolder: newShowFolder)
                     show.cues[index].body = .video(body)
                 }
+            case .image(var body):
+                if let resolved = body.media.resolve(showFolder: oldFolder) {
+                    body.media.rebase(resolvedURL: resolved, showFolder: newShowFolder)
+                    show.cues[index].body = .image(body)
+                }
             case .slide(var body):
                 if let resolved = body.media.resolve(showFolder: oldFolder) {
                     body.media.rebase(resolvedURL: resolved, showFolder: newShowFolder)

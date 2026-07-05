@@ -22,6 +22,8 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   the same thing on every display of a group.
 - **Camera cues** — live camera input (built-in, USB/UVC, Continuity) on any
   output group; runs until stopped; fade in/out.
+- **Image cues** — still images (PNG/JPEG/HEIC…) on any output group, with
+  geometry and fades; holds until stopped.
 - **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
   navigable deck: one group named after the file, one cue per slide, GO to
   advance, crossfade between slides, trailing clear cue. Decks are flattened
@@ -51,7 +53,8 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   button; drag media files (or whole decks) straight into the cue list;
   copy/paste/duplicate cues with reference-safe identity remapping; one-click
   renumber (10/20/30…); Open Recent; full-row color tags; collapsible groups;
-  waveform/filmstrip trim editors; broken-media relink; rotating backups and
+  waveform/filmstrip trim editors; media relink/replace on any cue (file
+  dialog or drop onto the inspector); rotating backups and
   playback-aware autosave. Dark show-control look with MagicLab styling.
 - **Show files** — versioned, diff-friendly JSON (`.stagewizard`); media
   referenced relative to the show file so shows survive folder moves; old

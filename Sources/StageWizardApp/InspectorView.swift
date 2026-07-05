@@ -20,7 +20,7 @@ struct InspectorView: View {
             switch body {
             case .group: return [.basics, .timeline, .triggers]
             case .audio: return [.basics, .timeAndLevels, .output, .triggers]
-            case .video, .camera, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
+            case .video, .camera, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .fade, .stop: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
@@ -82,6 +82,7 @@ struct InspectorView: View {
 
 private struct BasicsTab: View {
     @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
     let cueID: UUID
 
     var body: some View {
@@ -95,6 +96,7 @@ private struct BasicsTab: View {
                         set: { v in document.updateCue(cueID) { $0.name = v.isEmpty ? nil : v } }
                     ), prompt: Text(cue.body.defaultName))
                 }
+                MediaFileRow(cueID: cueID)
                 TextField("Notes", text: bind(\.notes) { $0.notes = $1 }, axis: .vertical)
                     .lineLimit(2...4)
                 HStack(spacing: 16) {
@@ -113,6 +115,14 @@ private struct BasicsTab: View {
             }
             .formStyle(.columns)
             .padding(12)
+            // Drop a replacement file anywhere on this tab to relink the cue.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !app.isShowMode, let url = urls.first,
+                      let cue = document.cue(withID: cueID),
+                      MediaRelink.accepts(url, for: cue) else { return false }
+                MediaRelink.replace(cueID: cueID, with: url, document: document)
+                return true
+            }
         }
     }
 
@@ -121,6 +131,96 @@ private struct BasicsTab: View {
             get: { document.cue(withID: cueID)?[keyPath: keyPath] ?? "" },
             set: { v in document.updateCue(cueID) { set(&$0, v) } }
         )
+    }
+}
+
+/// Relink/replace plumbing shared by the Basics media row and the
+/// missing-media banner: which cues carry a swappable media file, which
+/// file types they accept, and the one write path that swaps the reference.
+@MainActor
+enum MediaRelink {
+    static func mediaReference(_ cue: Cue) -> MediaReference? {
+        switch cue.body {
+        case .audio(let body): return body.media
+        case .video(let body): return body.media
+        case .image(let body): return body.media
+        default: return nil
+        }
+    }
+
+    static func accepts(_ url: URL, for cue: Cue) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        switch cue.body {
+        case .audio: return type.conforms(to: .audio)
+        case .video: return type.conforms(to: .movie) || type.conforms(to: .video)
+        case .image: return type.conforms(to: .image)
+        default: return false
+        }
+    }
+
+    static func replace(cueID: UUID, with url: URL, document: ShowDocumentController) {
+        let newRef = MediaReference(fileURL: url, showFolder: document.showFolder)
+        document.updateCue(cueID) { cue in
+            switch cue.body {
+            case .audio(var b): b.media = newRef; cue.body = .audio(b)
+            case .video(var b): b.media = newRef; cue.body = .video(b)
+            case .image(var b): b.media = newRef; cue.body = .image(b)
+            default: break
+            }
+        }
+    }
+
+    static func choose(cue: Cue, document: ShowDocumentController) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = switch cue.body {
+        case .audio: [.audio]
+        case .image: [.image]
+        default: [.movie, .video]
+        }
+        panel.message = "Choose the media file for cue \(cue.number)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        replace(cueID: cue.id, with: url, document: document)
+    }
+}
+
+/// Filename + found/missing status + always-available Choose… button for
+/// audio/video/image cues (slides reconvert from their deck instead).
+private struct MediaFileRow: View {
+    @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), let media = MediaRelink.mediaReference(cue) {
+            let resolved = media.resolve(showFolder: document.showFolder)
+            HStack(spacing: 8) {
+                Image(systemName: resolved != nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(resolved != nil ? Theme.standby : .orange)
+                Text(media.fileName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(resolved?.path ?? "Missing — was at \(media.absolutePath)")
+                if resolved == nil {
+                    Text("missing")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button(resolved == nil ? "Relink…" : "Change…") {
+                    MediaRelink.choose(cue: cue, document: document)
+                }
+                .disabled(app.isShowMode)
+                Text("or drop a file here")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(8)
+            .background(
+                (resolved == nil ? Color.orange.opacity(0.12) : Theme.insetBackground.opacity(0.6)),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+        }
     }
 }
 
@@ -220,6 +320,8 @@ private struct TimeAndLevelsTab: View {
             MediaTimingForm(cueID: cueID)
         case .camera:
             CameraTimingForm(cueID: cueID)
+        case .image:
+            ImageTimingForm(cueID: cueID)
         case .slide:
             SlideTimingForm(cueID: cueID)
         case .fade:
@@ -239,13 +341,11 @@ private struct TimeAndLevelsTab: View {
 /// Shared timing/levels editing for audio + video cue bodies.
 private struct MediaTimingForm: View {
     @Environment(ShowDocumentController.self) private var document
-    @Environment(AppModel.self) private var app
     let cueID: UUID
 
     var body: some View {
         if let cue = document.cue(withID: cueID) {
             Form {
-                mediaRow(for: cue)
                 trimEditor(for: cue)
                 TimecodeField(label: "Start (in)", value: mediaBinding(\.startTime) { $0.startTime = max(0, $1) })
                 HStack {
@@ -281,74 +381,6 @@ private struct MediaTimingForm: View {
             }
             .formStyle(.columns)
             .padding(12)
-            // Drop a replacement file anywhere on this tab to relink the cue.
-            .dropDestination(for: URL.self) { urls, _ in
-                guard !app.isShowMode, let url = urls.first,
-                      let cue = document.cue(withID: cueID),
-                      fileMatchesCueType(url, cue: cue) else { return false }
-                replaceMedia(with: url)
-                return true
-            }
-        }
-    }
-
-    /// Filename + found/missing status + always-available Choose… button.
-    @ViewBuilder
-    private func mediaRow(for cue: Cue) -> some View {
-        if let media = mediaReference(cue) {
-            let resolved = media.resolve(showFolder: document.showFolder)
-            HStack(spacing: 8) {
-                Image(systemName: resolved != nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(resolved != nil ? Theme.standby : .orange)
-                Text(media.fileName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(resolved?.path ?? "Missing — was at \(media.absolutePath)")
-                if resolved == nil {
-                    Text("missing")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-                Spacer()
-                Button(resolved == nil ? "Relink…" : "Change…") { relink(cue: cue) }
-                    .disabled(app.isShowMode)
-                Text("or drop a file here")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(8)
-            .background(
-                (resolved == nil ? Color.orange.opacity(0.12) : Theme.insetBackground.opacity(0.6)),
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-        }
-    }
-
-    private func mediaReference(_ cue: Cue) -> MediaReference? {
-        switch cue.body {
-        case .audio(let body): return body.media
-        case .video(let body): return body.media
-        default: return nil
-        }
-    }
-
-    private func fileMatchesCueType(_ url: URL, cue: Cue) -> Bool {
-        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
-        switch cue.body {
-        case .audio: return type.conforms(to: .audio)
-        case .video: return type.conforms(to: .movie) || type.conforms(to: .video)
-        default: return false
-        }
-    }
-
-    private func replaceMedia(with url: URL) {
-        let newRef = MediaReference(fileURL: url, showFolder: document.showFolder)
-        document.updateCue(cueID) { cue in
-            switch cue.body {
-            case .audio(var b): b.media = newRef; cue.body = .audio(b)
-            case .video(var b): b.media = newRef; cue.body = .video(b)
-            default: break
-            }
         }
     }
 
@@ -382,24 +414,12 @@ private struct MediaTimingForm: View {
                     Label("Media file missing: \(media.fileName)", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                     Spacer()
-                    Button("Relink…") { relink(cue: cue) }
+                    Button("Relink…") { MediaRelink.choose(cue: cue, document: document) }
                 }
                 .padding(8)
                 .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
             }
         }
-    }
-
-    private func relink(cue: Cue) {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = {
-            if case .audio = cue.body { return [.audio] }
-            return [.movie, .video]
-        }()
-        panel.message = "Choose the media file for cue \(cue.number)"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        replaceMedia(with: url)
     }
 
     /// Uniform access to the fields audio and video bodies share.
@@ -543,6 +563,71 @@ private struct CameraTimingForm: View {
                 change(&b)
                 cue.body = .camera(b)
             }
+        }
+    }
+}
+
+/// Images hold until stopped — only the edge fades are editable here.
+private struct ImageTimingForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .image(let image) = cue.body {
+            Form {
+                Text("Still image — holds until stopped by a stop cue, panic, or the Active Cues panel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TimecodeField(label: "Fade in", value: Binding(
+                    get: { image.fadeInDuration },
+                    set: { v in update { $0.fadeInDuration = max(0, v) } }
+                ))
+                TimecodeField(label: "Fade out", value: Binding(
+                    get: { image.fadeOutDuration },
+                    set: { v in update { $0.fadeOutDuration = max(0, v) } }
+                ))
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout ImageBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .image(var b) = cue.body {
+                change(&b)
+                cue.body = .image(b)
+            }
+        }
+    }
+}
+
+private struct ImageOutputSettings: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .image(let image) = cue.body {
+            Form {
+                OutputGroupPicker(selection: Binding(
+                    get: { image.outputGroupID },
+                    set: { v in
+                        document.updateCue(cueID) { cue in
+                            if case .image(var b) = cue.body {
+                                b.outputGroupID = v
+                                cue.body = .image(b)
+                            }
+                        }
+                    }
+                ))
+                if image.outputGroupID == nil {
+                    Label("No output assigned — the image won't play.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.columns)
+            .padding(12)
         }
     }
 }
@@ -723,7 +808,7 @@ struct CueTargetPicker: View {
 extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
-        case .audio, .video, .camera, .slide, .group: return true
+        case .audio, .video, .camera, .image, .slide, .group: return true
         case .fade, .stop, .broken: return false
         }
     }
@@ -753,6 +838,8 @@ private struct OutputTab: View {
             }
         case .camera:
             CameraOutputSettings(cueID: cueID)
+        case .image:
+            ImageOutputSettings(cueID: cueID)
         case .slide:
             SlideOutputSettings(cueID: cueID)
         default:

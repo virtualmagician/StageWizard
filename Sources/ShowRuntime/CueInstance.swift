@@ -140,7 +140,7 @@ public final class CueInstance: Identifiable {
         }
 
         switch cue.body {
-        case .audio, .video, .camera, .slide:
+        case .audio, .video, .camera, .image, .slide:
             runMediaAction()
         case .fade(let body):
             runFadeAction(body)

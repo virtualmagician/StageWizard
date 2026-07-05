@@ -72,7 +72,8 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - Stopping a cue (stop cue / Stop All / panic) NEVER fires its auto-follow.
 - Auto-continue anchors to cue START + post-wait; auto-follow to completion.
 - GO past the last cue goes dead — no wraparound.
-- Video/camera cues REQUIRE an output group (no implicit main-display target).
+- Video/camera/image/slide cues REQUIRE an output group (no implicit main-display target).
+- Slides replace each other on the same output; standalone image cues LAYER (like video).
 - Fade cue with no target is a warned no-op; targeting a group reaches children.
 - Output groups may span displays → one decode mirrors to N layers.
 - Rehearsal mode routes video/camera to floating preview windows only.

@@ -62,6 +62,15 @@ final class EnginePlayerProvider: CuePlayerProviding {
             )
             return try await StillCuePlayer.arm(body: body, imageURL: url, targets: targets)
 
+        case .image(let body):
+            guard let url = body.media.resolve(showFolder: showFolder) else {
+                throw ArmError.mediaMissing(cueName: cue.displayName)
+            }
+            let targets = try resolveTargets(
+                groupID: body.outputGroupID, legacy: nil, cueNumber: cue.number
+            )
+            return try await StillCuePlayer.arm(body: body, imageURL: url, targets: targets)
+
         case .fade, .stop, .group, .broken:
             throw ArmError.notAMediaCue
         }

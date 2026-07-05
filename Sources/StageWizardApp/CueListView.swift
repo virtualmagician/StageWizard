@@ -187,7 +187,7 @@ struct CueListView: View {
             guard !media.isEmpty else { return }
             let skipped = CueFactory.importMedia(urls: media, at: insertAt, into: document)
             if skipped > 0 {
-                app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio, video, or a deck.")
+                app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio, video, an image, or a deck.")
             }
         }
     }
@@ -346,6 +346,9 @@ struct CueRowView: View {
         } else if case .slide = cue.body {
             Text("∞")
                 .foregroundStyle(.secondary)
+        } else if case .image = cue.body {
+            Text("∞")
+                .foregroundStyle(.secondary)
         } else if let duration = DurationCache.shared.effectiveDuration(
             of: cue, in: document.show, showFolder: document.showFolder
         ) {
@@ -402,6 +405,7 @@ struct CueRowView: View {
         switch cue.body {
         case .video(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
         case .camera(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
+        case .image(let body): groupID = .some(body.outputGroupID)
         case .slide(let body): groupID = .some(body.outputGroupID)
         default: return false
         }
@@ -414,6 +418,7 @@ struct CueRowView: View {
         let media: MediaReference? = switch cue.body {
         case .audio(let body): body.media
         case .video(let body): body.media
+        case .image(let body): body.media
         case .slide(let body): body.media
         default: nil
         }
@@ -452,6 +457,7 @@ func typeSymbol(_ body: CueBody) -> String {
     case .audio: return "waveform"
     case .video: return "film"
     case .camera: return "video.fill"
+    case .image: return "photo.fill"
     case .slide: return "photo"
     case .fade: return "dial.low"
     case .stop: return "stop.fill"

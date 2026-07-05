@@ -215,6 +215,7 @@ final class AppModel {
         let settings: (VideoGeometry, FillMode)? = switch cue.body {
         case .video(let body): (body.geometry, body.fillMode)
         case .camera(let body): (body.geometry, body.fillMode)
+        case .image(let body): (body.geometry, body.fillMode)
         case .slide(let body): (body.geometry, body.fillMode)
         default: nil
         }

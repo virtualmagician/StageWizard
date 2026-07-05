@@ -70,6 +70,9 @@ struct ShowCommands: Commands {
             Button("Add Slides from Deck…") { SlideDeckImporter.importDeckViaPanel(into: document, app: app) }
                 .keyboardShortcut("7", modifiers: [.command, .shift])
                 .disabled(app.isShowMode)
+            Button("Add Image Cue…") { CueFactory.addMediaCue(kind: .image, to: document) }
+                .keyboardShortcut("8", modifiers: [.command, .shift])
+                .disabled(app.isShowMode)
             Divider()
             Button("Renumber All Cues") { CueFactory.renumberAll(in: document) }
                 .disabled(app.isShowMode)
@@ -88,21 +91,32 @@ struct ShowCommands: Commands {
 @MainActor
 enum CueFactory {
     enum MediaKind {
-        case audio, video
+        case audio, video, image
     }
 
     static func addMediaCue(kind: MediaKind, to document: ShowDocumentController) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = kind == .audio ? [.audio] : [.movie, .video]
-        panel.message = kind == .audio ? "Choose audio files" : "Choose video files"
+        switch kind {
+        case .audio:
+            panel.allowedContentTypes = [.audio]
+            panel.message = "Choose audio files"
+        case .video:
+            panel.allowedContentTypes = [.movie, .video]
+            panel.message = "Choose video files"
+        case .image:
+            panel.allowedContentTypes = [.image]
+            panel.message = "Choose image files"
+        }
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
 
         for url in panel.urls {
             let media = MediaReference(fileURL: url, showFolder: document.showFolder)
-            let body: CueBody = kind == .audio
-                ? .audio(AudioBody(media: media))
-                : .video(VideoBody(media: media, outputGroupID: defaultOutputGroupID(in: document)))
+            let body: CueBody = switch kind {
+            case .audio: .audio(AudioBody(media: media))
+            case .video: .video(VideoBody(media: media, outputGroupID: defaultOutputGroupID(in: document)))
+            case .image: .image(ImageBody(media: media, outputGroupID: defaultOutputGroupID(in: document)))
+            }
             insert(Cue(number: document.show.nextCueNumber(), body: body), into: document)
         }
     }
@@ -251,6 +265,8 @@ enum CueFactory {
                 .video(VideoBody(media: media, outputGroupID: defaultOutputGroupID(in: document)))
             } else if type.conforms(to: .audio) {
                 .audio(AudioBody(media: media))
+            } else if type.conforms(to: .image) {
+                .image(ImageBody(media: media, outputGroupID: defaultOutputGroupID(in: document)))
             } else {
                 nil
             }
