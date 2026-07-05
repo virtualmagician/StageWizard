@@ -78,6 +78,20 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - GO past the last cue goes dead — no wraparound.
 - Video/camera/image/slide cues REQUIRE an output group (no implicit main-display target).
 - Slides replace each other on the same output; standalone image cues LAYER (like video).
+- Render layers 1-10 (zPosition on player layers/containers); default 5; ties
+  break by ARM ORDER — that tie-break is what keeps slide crossfades working.
+- Text cues render RTF to a 2x bitmap at stage size (TextCuePlayer); edits and
+  preview resizes re-render; model stays AppKit-free (RGBAColor, plainPreview).
+- Camera effects (CameraEffects on CameraBody, default all-off): passthrough
+  preview layer vs processed path (CameraFrameProcessor: data output on its own
+  queue -> Vision segmentation/hand pose -> CoreImage -> CGImage to content
+  layers). Each camera target = container layer (fade/z/transform) holding
+  preview + content + up to 2 hand emitters. Effects swap LIVE (no session
+  restart; data connection disabled when idle). Mirroring pushed into the
+  capture connection when supported, else flipped in the processor.
+- .pex (Particle Designer) emitters map onto CAEmitterLayer (PEXEmitter.swift);
+  texture = base64 + gzip (header stripped, raw-DEFLATE via Compression);
+  additive blend deliberately approximated with plain alpha.
 - Fade cue with no target is a warned no-op; targeting a group reaches children.
 - Output groups may span displays → one decode mirrors to N layers.
 - Rehearsal mode routes video/camera to floating preview windows only.

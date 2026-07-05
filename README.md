@@ -26,6 +26,17 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   output group; runs until stopped; fade in/out.
 - **Image cues** — still images (PNG/JPEG/HEIC…) on any output group, with
   geometry and fades; holds until stopped.
+- **Text cues** — rich text on stage (titles, lower thirds): a real
+  rich-text editor with the macOS Fonts panel, pasted formatting survives,
+  transparent or colored background, live edits while the cue plays.
+- **Render layers** — every visual cue picks a layer 1–10 (1 = background,
+  10 = front) so video, camera, text, and stills stack predictably.
+- **Live camera effects** — per-cue, toggled live: **person segmentation**
+  (the background turns transparent, revealing lower layers behind the
+  performer) and **magic dust** — particle emitters that follow the
+  performer's hands (Vision hand tracking), using Particle Designer
+  `.pex` emitters or the built-in sparkle. All on-device (Vision +
+  CoreImage), nothing external at showtime.
 - **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
   navigable deck: one group named after the file, one cue per slide, GO to
   advance, crossfade between slides, trailing clear cue. Decks are flattened

@@ -46,6 +46,55 @@ final class V7Tests: XCTestCase {
         XCTAssertEqual(low.layer, 1)
     }
 
+    // MARK: - .pex emitter parsing
+
+    private func fixtureData(_ name: String, _ ext: String) throws -> Data {
+        let url = Bundle(for: V7Tests.self).url(forResource: name, withExtension: ext)
+        return try Data(contentsOf: try XCTUnwrap(url, "fixture \(name).\(ext) in test bundle"))
+    }
+
+    func testPEXParsesRealParticleDesignerFile() throws {
+        let config = try XCTUnwrap(PEXEmitterConfig.parse(data: fixtureData("test1", "pex")))
+        XCTAssertEqual(config.maxParticles, 750)
+        XCTAssertEqual(config.particleLifeSpan, 3.9197, accuracy: 0.0001)
+        XCTAssertEqual(config.speed, 43.85, accuracy: 0.001)
+        XCTAssertEqual(config.angleVariance, 360)
+        XCTAssertEqual(config.gravityX, 158.80, accuracy: 0.001)
+        XCTAssertEqual(config.gravityY, -254.46, accuracy: 0.001)
+        XCTAssertEqual(config.startColor.blue, 0.84, accuracy: 0.001)
+        XCTAssertEqual(config.startParticleSize, 37)
+        XCTAssertEqual(config.emitterType, 0, "gravity-type emitter")
+        XCTAssertTrue(config.isAdditive, "770/1 = srcAlpha/one")
+        XCTAssertNotNil(config.texture, "embedded gzip texture decodes")
+        XCTAssertGreaterThan(config.texture?.width ?? 0, 0)
+    }
+
+    func testPEXEmitterLayerMapping() throws {
+        let config = try XCTUnwrap(PEXEmitterConfig.parse(data: fixtureData("test1", "pex")))
+        let layer = config.makeEmitterLayer()
+        XCTAssertEqual(layer.birthRate, 0, "emitters start tapped off (no hand yet)")
+        let cell = try XCTUnwrap(layer.emitterCells?.first)
+        XCTAssertEqual(cell.birthRate, Float(750 / 3.9197), accuracy: 0.5)
+        XCTAssertEqual(cell.lifetime, 3.9197, accuracy: 0.001)
+        XCTAssertEqual(cell.velocity, 43.85, accuracy: 0.01)
+        XCTAssertNotNil(cell.contents)
+    }
+
+    func testGunzipRejectsGarbageAndAcceptsGzip() throws {
+        XCTAssertNil(PEXEmitterConfig.gunzip(Data([0, 1, 2, 3])))
+        // Round-trip a known gzip blob (made by /usr/bin/gzip semantics is
+        // overkill here — the embedded texture in test1.pex covers the
+        // positive path; this pins the header validation).
+        XCTAssertNil(PEXEmitterConfig.gunzip(Data()))
+    }
+
+    func testBuiltinSparkleIsUsable() {
+        let config = PEXEmitterConfig.builtinSparkle()
+        XCTAssertNotNil(config.texture)
+        let layer = config.makeEmitterLayer()
+        XCTAssertEqual(layer.emitterCells?.count, 1)
+    }
+
     // MARK: - Camera effects
 
     func testCameraEffectsDefaultOffForOlderFiles() throws {

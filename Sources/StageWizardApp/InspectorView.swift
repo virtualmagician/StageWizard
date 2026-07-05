@@ -1051,6 +1051,36 @@ private struct CameraOutputSettings: View {
                 Text("The background turns transparent — put video or images on a LOWER layer (Geometry tab) and they show behind the performer.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+
+                Toggle("Magic dust on hands", isOn: Binding(
+                    get: { camera.effects.magicDust },
+                    set: { v in updateEffects { $0.magicDust = v } }
+                ))
+                if camera.effects.magicDust {
+                    HStack(spacing: 8) {
+                        Text("Emitter:")
+                        Text(camera.effects.dustEmitter?.fileName ?? "Built-in sparkle")
+                            .foregroundStyle(.secondary)
+                        Button("Choose .pex…") {
+                            let panel = NSOpenPanel()
+                            panel.allowsMultipleSelection = false
+                            panel.allowedContentTypes = [.init(filenameExtension: "pex") ?? .xml]
+                            panel.message = "Choose a Particle Designer emitter"
+                            if panel.runModal() == .OK, let url = panel.url {
+                                let ref = MediaReference(fileURL: url, showFolder: document.showFolder)
+                                updateEffects { $0.dustEmitter = ref }
+                            }
+                        }
+                        if camera.effects.dustEmitter != nil {
+                            Button("Use Built-in") {
+                                updateEffects { $0.dustEmitter = nil }
+                            }
+                        }
+                    }
+                    Text("Particles follow the performer's hands. Emitters from Particle Designer (.pex) or the built-in sparkle.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .formStyle(.columns)
             .padding(12)

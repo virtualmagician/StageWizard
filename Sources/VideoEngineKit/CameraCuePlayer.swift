@@ -99,6 +99,10 @@ public final class CameraCuePlayer: MediaPlayback {
     private let processorMirrors: Bool
     private var effects: CameraEffects
     private var dustEmitterURL: URL?
+    /// Per target: up to 2 emitters (one per tracked hand), above the content.
+    private var handEmitters: [[CAEmitterLayer]] = []
+    /// Smoothed hand positions (normalized), index-aligned with emitters.
+    private var smoothedHands: [CGPoint?] = [nil, nil]
     private var fillModeSetting: FillMode
     private var geometrySetting: VideoGeometry
     private let fadeInDuration: TimeInterval
@@ -259,6 +263,7 @@ public final class CameraCuePlayer: MediaPlayback {
 
         wireProcessor()
         setProcessedMode(effects.anyEnabled)
+        rebuildDustEmitters()
     }
 
     private static func contentsGravity(for gravity: AVLayerVideoGravity) -> CALayerContentsGravity {
@@ -294,11 +299,67 @@ public final class CameraCuePlayer: MediaPlayback {
         updateHandEmitters(hands: product.hands, bufferSize: product.bufferSize)
     }
 
-    /// Magic-dust hook — emitters land with the .pex support (V7d); the
-    /// hand positions already arrive here mapped-ready.
+    private func rebuildDustEmitters() {
+        for emitters in handEmitters {
+            for emitter in emitters { emitter.removeFromSuperlayer() }
+        }
+        handEmitters = []
+        smoothedHands = [nil, nil]
+        guard effects.magicDust else { return }
+        let config = dustEmitterURL.flatMap { PEXEmitterConfig.parse(url: $0) }
+            ?? PEXEmitterConfig.builtinSparkle()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for entry in targetLayers {
+            var emitters: [CAEmitterLayer] = []
+            for _ in 0..<2 {
+                let emitter = config.makeEmitterLayer()
+                emitter.frame = entry.container.bounds
+                emitter.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+                entry.container.addSublayer(emitter)   // above preview + content
+                emitters.append(emitter)
+            }
+            handEmitters.append(emitters)
+        }
+        CATransaction.commit()
+    }
+
+    /// Move the dust to the performer's hands. Positions are low-pass
+    /// smoothed (Vision jitters a few px frame-to-frame); a lost hand turns
+    /// its emitter's tap off so already-born dust winds down naturally.
     private func updateHandEmitters(hands: [CGPoint], bufferSize: CGSize) {
-        _ = hands
-        _ = bufferSize
+        guard effects.magicDust, !handEmitters.isEmpty else { return }
+        for index in 0..<2 {
+            if index < hands.count {
+                let previous = smoothedHands[index]
+                let smoothed = previous.map {
+                    CGPoint(x: $0.x * 0.55 + hands[index].x * 0.45,
+                            y: $0.y * 0.55 + hands[index].y * 0.45)
+                } ?? hands[index]
+                smoothedHands[index] = smoothed
+            } else {
+                smoothedHands[index] = nil
+            }
+        }
+        let mappingFill: FillMode = geometrySetting.mode == .custom ? .fit : fillModeSetting
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (targetIndex, entry) in targetLayers.enumerated() {
+            let emitters = handEmitters[targetIndex]
+            for (index, emitter) in emitters.enumerated() {
+                if let hand = smoothedHands[index] {
+                    emitter.emitterPosition = mapNormalizedPoint(
+                        hand, bufferSize: bufferSize,
+                        layerSize: entry.container.bounds.size,
+                        fillMode: mappingFill
+                    )
+                    emitter.birthRate = 1
+                } else {
+                    emitter.birthRate = 0
+                }
+            }
+        }
+        CATransaction.commit()
     }
 
     /// Live effects change from the inspector. Swapping passthrough ↔
@@ -309,6 +370,7 @@ public final class CameraCuePlayer: MediaPlayback {
         self.dustEmitterURL = dustEmitterURL
         wireProcessor()
         setProcessedMode(newEffects.anyEnabled)
+        rebuildDustEmitters()
         processor.output.connection(with: .video)?.isEnabled = newEffects.anyEnabled
     }
 
