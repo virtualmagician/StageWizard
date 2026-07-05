@@ -643,11 +643,16 @@ private struct TextContentTab: View {
     @Environment(ShowDocumentController.self) private var document
     @Environment(AppModel.self) private var app
     let cueID: UUID
+    @State private var editor = RichTextEditorController()
+    @State private var fontSize: Double = 96
+    @State private var lineHeight: Double = 1.0
+    @State private var textColor: Color = .white
 
     var body: some View {
         if let cue = document.cue(withID: cueID), case .text(let text) = cue.body {
             VStack(alignment: .leading, spacing: 8) {
-                RichTextEditor(rtf: Binding(
+                formattingBar
+                RichTextEditor(controller: editor, rtf: Binding(
                     get: { text.rtf },
                     set: { _ in }   // writes flow through onEdit for atomicity
                 ), backgroundColor: text.backgroundColor) { rtf, plain in
@@ -664,7 +669,7 @@ private struct TextContentTab: View {
                     Button("Fonts…") {
                         NSFontManager.shared.orderFrontFontPanel(nil)
                     }
-                    .help("Select text, then choose a font — standard macOS Fonts panel")
+                    .help("Full font browser — applies to the selection")
 
                     Toggle("Transparent background", isOn: Binding(
                         get: { text.backgroundColor == nil },
@@ -693,6 +698,75 @@ private struct TextContentTab: View {
             .padding(12)
             .disabled(app.isShowMode)
         }
+    }
+
+    /// Formatting controls act on the selection (or the whole text when
+    /// nothing is selected) and write straight back through the editor.
+    private var formattingBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                editor.toggleBold()
+            } label: {
+                Image(systemName: "bold")
+            }
+            .help("Bold")
+            Button {
+                editor.toggleItalic()
+            } label: {
+                Image(systemName: "italic")
+            }
+            .help("Italic")
+
+            Divider().frame(height: 16)
+
+            Button {
+                editor.setAlignment(.left)
+            } label: {
+                Image(systemName: "text.alignleft")
+            }
+            .help("Align left")
+            Button {
+                editor.setAlignment(.center)
+            } label: {
+                Image(systemName: "text.aligncenter")
+            }
+            .help("Center")
+            Button {
+                editor.setAlignment(.right)
+            } label: {
+                Image(systemName: "text.alignright")
+            }
+            .help("Align right")
+
+            Divider().frame(height: 16)
+
+            Text("Size")
+                .foregroundStyle(.secondary)
+            TextField("", value: $fontSize, format: .number.precision(.fractionLength(0)))
+                .frame(width: 44)
+                .multilineTextAlignment(.trailing)
+                .onSubmit { editor.setFontSize(CGFloat(max(4, fontSize))) }
+            Stepper("", value: $fontSize, in: 4...400, step: 4)
+                .labelsHidden()
+                .onChange(of: fontSize) { _, v in editor.setFontSize(CGFloat(max(4, v))) }
+
+            Text("Line")
+                .foregroundStyle(.secondary)
+            Stepper(String(format: "%.2f", lineHeight), value: $lineHeight, in: 0.6...3.0, step: 0.05)
+                .onChange(of: lineHeight) { _, v in editor.setLineHeight(CGFloat(v)) }
+                .help("Line height multiple")
+
+            ColorPicker("", selection: $textColor, supportsOpacity: true)
+                .labelsHidden()
+                .onChange(of: textColor) { _, v in
+                    editor.setTextColor(NSColor(v))
+                }
+                .help("Text color — applies to the selection")
+
+            Spacer()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private func update(_ change: (inout TextBody) -> Void) {
@@ -1060,9 +1134,29 @@ private struct CameraOutputSettings: View {
                 ))
                 if camera.effects.magicDust {
                     HStack(spacing: 8) {
-                        Text("Emitter:")
-                        Text(camera.effects.dustEmitter?.fileName ?? "Built-in sparkle")
-                            .foregroundStyle(.secondary)
+                        Picker("Emitter", selection: Binding(
+                            get: {
+                                camera.effects.dustEmitter != nil
+                                    ? "custom"
+                                    : (camera.effects.dustPreset ?? DustPresets.defaultName)
+                            },
+                            set: { choice in
+                                guard choice != "custom" else { return }
+                                updateEffects {
+                                    $0.dustPreset = choice
+                                    $0.dustEmitter = nil
+                                }
+                            }
+                        )) {
+                            ForEach(DustPresets.names, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                            if let custom = camera.effects.dustEmitter {
+                                Text("Custom: \(custom.fileName)").tag("custom")
+                            }
+                        }
+                        .frame(maxWidth: 280)
+
                         Button("Choose .pex…") {
                             let panel = NSOpenPanel()
                             panel.allowsMultipleSelection = false
@@ -1073,13 +1167,20 @@ private struct CameraOutputSettings: View {
                                 updateEffects { $0.dustEmitter = ref }
                             }
                         }
-                        if camera.effects.dustEmitter != nil {
-                            Button("Use Built-in") {
-                                updateEffects { $0.dustEmitter = nil }
-                            }
-                        }
                     }
-                    Text("Particles follow the performer's hands. Emitters from Particle Designer (.pex) or the built-in sparkle.")
+                    HStack(spacing: 8) {
+                        Text("Size")
+                        Slider(value: Binding(
+                            get: { camera.effects.dustScale },
+                            set: { v in updateEffects { $0.dustScale = v } }
+                        ), in: 0.5...10)
+                        .frame(maxWidth: 240)
+                        Text(String(format: "×%.1f", camera.effects.dustScale))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    Text("Particles follow the performer's hands — pick a preset or any Particle Designer .pex.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

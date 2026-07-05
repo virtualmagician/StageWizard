@@ -2,6 +2,26 @@ import AppKit
 import Compression
 import QuartzCore
 
+/// The .pex presets bundled with the app (Support/presets → Resources).
+public enum DustPresets {
+    /// Preset display names, alphabetical ("White", "MagicFire", …).
+    @MainActor
+    public static let names: [String] = {
+        (Bundle.main.urls(forResourcesWithExtension: "pex", subdirectory: "presets") ?? [])
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted()
+    }()
+
+    @MainActor
+    public static func url(for name: String) -> URL? {
+        Bundle.main.url(forResource: name, withExtension: "pex", subdirectory: "presets")
+    }
+
+    /// The preset used when a cue names none.
+    @MainActor
+    public static var defaultName: String { names.first ?? "White" }
+}
+
 /// Particle Designer `.pex` emitter support — parsed with Foundation's
 /// XMLParser and mapped onto Apple's CAEmitterLayer (zero dependencies).
 /// Gravity-type emitters (the common case) map with full fidelity; radial
@@ -178,7 +198,7 @@ public struct PEXEmitterConfig: Sendable {
     /// the LAYER is the on/off tap (0 = off), so hands can vanish and the
     /// already-born dust winds down naturally.
     @MainActor
-    public func makeEmitterLayer() -> CAEmitterLayer {
+    public func makeEmitterLayer(sizeScale: Double = 1) -> CAEmitterLayer {
         let cell = CAEmitterCell()
         let life = max(particleLifeSpan, 0.05)
         let textureImage = texture ?? Self.builtinSparkleTexture
@@ -197,9 +217,10 @@ public struct PEXEmitterConfig: Sendable {
         // macOS layer space; only unflipped files need the sign swap.
         cell.yAcceleration = yCoordFlipped == 1 ? gravityY : -gravityY
 
-        cell.scale = startParticleSize / textureSize
-        cell.scaleRange = startParticleSizeVariance / textureSize
-        cell.scaleSpeed = (finishParticleSize - startParticleSize) / life / textureSize
+        let sizeScale = min(max(sizeScale, 0.5), 10)
+        cell.scale = startParticleSize / textureSize * sizeScale
+        cell.scaleRange = startParticleSizeVariance / textureSize * sizeScale
+        cell.scaleSpeed = (finishParticleSize - startParticleSize) / life / textureSize * sizeScale
 
         cell.color = CGColor(
             red: startColor.red, green: startColor.green,

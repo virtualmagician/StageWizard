@@ -325,16 +325,41 @@ public struct CameraEffects: Codable, Hashable, Sendable {
     public var segmentation: Bool
     /// Particle emitters that follow the performer's hands.
     public var magicDust: Bool
-    /// Particle Designer .pex emitter; nil = the built-in sparkle.
+    /// Custom Particle Designer .pex file; wins over `dustPreset`.
     public var dustEmitter: MediaReference?
+    /// Bundled preset name (Support/presets); nil = default preset.
+    public var dustPreset: String?
+    /// Particle size multiplier, 0.5…10.
+    public var dustScale: Double
 
-    public init(segmentation: Bool = false, magicDust: Bool = false, dustEmitter: MediaReference? = nil) {
+    public init(
+        segmentation: Bool = false,
+        magicDust: Bool = false,
+        dustEmitter: MediaReference? = nil,
+        dustPreset: String? = nil,
+        dustScale: Double = 1
+    ) {
         self.segmentation = segmentation
         self.magicDust = magicDust
         self.dustEmitter = dustEmitter
+        self.dustPreset = dustPreset
+        self.dustScale = min(max(dustScale, 0.5), 10)
     }
 
     public var anyEnabled: Bool { segmentation || magicDust }
+
+    private enum CodingKeys: String, CodingKey {
+        case segmentation, magicDust, dustEmitter, dustPreset, dustScale
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        segmentation = try c.decodeIfPresent(Bool.self, forKey: .segmentation) ?? false
+        magicDust = try c.decodeIfPresent(Bool.self, forKey: .magicDust) ?? false
+        dustEmitter = try c.decodeIfPresent(MediaReference.self, forKey: .dustEmitter)
+        dustPreset = try c.decodeIfPresent(String.self, forKey: .dustPreset)
+        dustScale = min(max(try c.decodeIfPresent(Double.self, forKey: .dustScale) ?? 1, 0.5), 10)
+    }
 }
 
 /// Live camera input shown fullscreen on a display. Video-only — sound stays

@@ -39,6 +39,9 @@ targets:
         buildPhase: resources
       - path: Support/Credits.rtf
         buildPhase: resources
+      - path: Support/presets
+        type: folder
+        buildPhase: resources
     postBuildScripts:
       # The repo lives under Dropbox (File Provider), which tags build
       # products with xattrs that codesign rejects as "detritus". Strip them

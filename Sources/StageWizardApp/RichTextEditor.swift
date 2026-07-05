@@ -6,7 +6,94 @@ import AppKit
 /// the renderer's exact insets and vertical centering — what wraps here
 /// wraps identically on the output (see TextCuePlayer.render). Pasting
 /// formatted text and the standard Fonts panel work natively.
+/// Hands the formatting toolbar a live line to the NSTextView. Every edit
+/// funnels through `didChangeText()` so the RTF binding stays in sync.
+@MainActor
+final class RichTextEditorController {
+    weak var textView: NSTextView?
+
+    /// Selection, or the whole document when nothing is selected — an
+    /// operator formatting a title card usually means "all of it".
+    private var targetRange: NSRange? {
+        guard let textView, let storage = textView.textStorage else { return nil }
+        let selection = textView.selectedRange()
+        return selection.length > 0 ? selection : NSRange(location: 0, length: storage.length)
+    }
+
+    private func mutateParagraphs(_ change: (NSMutableParagraphStyle) -> Void) {
+        guard let textView, let storage = textView.textStorage, let range = targetRange,
+              storage.length > 0 else { return }
+        let paragraphRange = (storage.string as NSString).paragraphRange(for: range)
+        storage.beginEditing()
+        storage.enumerateAttribute(.paragraphStyle, in: paragraphRange) { value, runRange, _ in
+            let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+                ?? NSMutableParagraphStyle()
+            change(style)
+            storage.addAttribute(.paragraphStyle, value: style, range: runRange)
+        }
+        storage.endEditing()
+        textView.didChangeText()
+    }
+
+    private func mutateFonts(_ convert: (NSFont) -> NSFont) {
+        guard let textView, let storage = textView.textStorage, let range = targetRange,
+              storage.length > 0 else { return }
+        storage.beginEditing()
+        storage.enumerateAttribute(.font, in: range) { value, runRange, _ in
+            let font = value as? NSFont ?? NSFont.systemFont(ofSize: 96)
+            storage.addAttribute(.font, value: convert(font), range: runRange)
+        }
+        storage.endEditing()
+        textView.didChangeText()
+    }
+
+    func setAlignment(_ alignment: NSTextAlignment) {
+        mutateParagraphs { $0.alignment = alignment }
+    }
+
+    func setLineHeight(_ multiple: CGFloat) {
+        mutateParagraphs { $0.lineHeightMultiple = multiple }
+    }
+
+    func toggleBold() {
+        toggleTrait(.boldFontMask)
+    }
+
+    func toggleItalic() {
+        toggleTrait(.italicFontMask)
+    }
+
+    private func toggleTrait(_ trait: NSFontTraitMask) {
+        guard let textView, let storage = textView.textStorage, let range = targetRange,
+              storage.length > 0, range.location < storage.length else { return }
+        let manager = NSFontManager.shared
+        let firstFont = storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+            ?? NSFont.systemFont(ofSize: 96)
+        let hasTrait = manager.traits(of: firstFont).contains(trait)
+        mutateFonts { font in
+            hasTrait
+                ? manager.convert(font, toNotHaveTrait: trait)
+                : manager.convert(font, toHaveTrait: trait)
+        }
+    }
+
+    func setFontSize(_ size: CGFloat) {
+        let manager = NSFontManager.shared
+        mutateFonts { manager.convert($0, toSize: size) }
+    }
+
+    func setTextColor(_ color: NSColor) {
+        guard let textView, let storage = textView.textStorage, let range = targetRange,
+              storage.length > 0 else { return }
+        storage.beginEditing()
+        storage.addAttribute(.foregroundColor, value: color, range: range)
+        storage.endEditing()
+        textView.didChangeText()
+    }
+}
+
 struct RichTextEditor: NSViewRepresentable {
+    var controller: RichTextEditorController
     @Binding var rtf: Data
     /// nil = transparent → dark checkerboard behind the text.
     var backgroundColor: RGBAColor?
@@ -16,6 +103,7 @@ struct RichTextEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> StageEditorView {
         let view = StageEditorView()
         view.textView.delegate = context.coordinator
+        controller.textView = view.textView
         context.coordinator.stageView = view
         context.coordinator.load(rtf: rtf, into: view.textView)
         view.setBackground(backgroundColor)

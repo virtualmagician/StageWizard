@@ -308,14 +308,16 @@ public final class CameraCuePlayer: MediaPlayback {
         handEmitters = []
         smoothedHands = [nil, nil]
         guard effects.magicDust else { return }
+        let presetURL = DustPresets.url(for: effects.dustPreset ?? DustPresets.defaultName)
         let config = dustEmitterURL.flatMap { PEXEmitterConfig.parse(url: $0) }
+            ?? presetURL.flatMap { PEXEmitterConfig.parse(url: $0) }
             ?? PEXEmitterConfig.builtinSparkle()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for entry in targetLayers {
             var emitters: [CAEmitterLayer] = []
             for _ in 0..<2 {
-                let emitter = config.makeEmitterLayer()
+                let emitter = config.makeEmitterLayer(sizeScale: effects.dustScale)
                 emitter.frame = entry.container.bounds
                 emitter.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
                 entry.container.addSublayer(emitter)   // above preview + content
