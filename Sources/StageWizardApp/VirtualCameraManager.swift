@@ -1,5 +1,6 @@
 import AppKit
 import CoreMediaIO
+import os
 import ScreenCaptureKit
 import SystemExtensions
 
@@ -44,6 +45,7 @@ final class VirtualCameraManager: NSObject {
     private let feed = SinkFeed()
     private var stream: SCStream?
     private var connectTask: Task<Void, Never>?
+    private let log = Logger(subsystem: "com.marcotempest.stagewizard", category: "virtualcam")
 
     override init() {
         super.init()
@@ -52,7 +54,9 @@ final class VirtualCameraManager: NSObject {
         connectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard let self, self.status == .inactive else { return }
-            if SinkFeed.findDevice() != nil {
+            let device = SinkFeed.findDevice()
+            self.log.info("launch probe: extension device \(device.map(String.init(describing:)) ?? "NOT FOUND")")
+            if device != nil {
                 self.status = .active
                 await self.startFeeding()
             }
@@ -83,18 +87,24 @@ final class VirtualCameraManager: NSObject {
     // MARK: - Feeding
 
     func startFeeding() async {
+        log.info("startFeeding: status \(String(describing: self.status)) feeding \(self.isFeeding)")
         guard status == .active, !isFeeding else { return }
 
         // Screen Recording permission gates the monitor capture.
-        if !CGPreflightScreenCaptureAccess() {
+        let preflight = CGPreflightScreenCaptureAccess()
+        log.info("screen recording preflight: \(preflight)")
+        if !preflight {
             CGRequestScreenCaptureAccess()
             guard CGPreflightScreenCaptureAccess() else {
+                log.info("screen recording still denied after request")
                 onWarning?("Virtual webcam needs Screen Recording access — enable it in System Settings → Privacy & Security → Screen Recording, then relaunch.")
                 return
             }
         }
 
-        guard feed.connect() else {
+        let connected = feed.connect()
+        log.info("sink connect: \(connected)")
+        guard connected else {
             onWarning?("Virtual webcam: the camera extension is installed but its device didn't appear yet — try again in a few seconds.")
             return
         }
@@ -110,7 +120,9 @@ final class VirtualCameraManager: NSObject {
         do {
             try await startCapture(of: window)
             isFeeding = true
+            log.info("capture started: window \(window.windowNumber)")
         } catch {
+            log.error("capture failed: \(error.localizedDescription)")
             onWarning?("Virtual webcam capture failed: \(error.localizedDescription)")
         }
     }
@@ -199,6 +211,11 @@ extension VirtualCameraManager: OSSystemExtensionRequestDelegate {
 /// `@unchecked Sendable` is sound under that invariant.
 private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
     let queue = DispatchQueue(label: "com.marcotempest.stagewizard.virtualcam-feed")
+    private let log = Logger(subsystem: "com.marcotempest.stagewizard", category: "virtualcam")
+    private var receivedCount = 0
+    private var completeCount = 0
+    private var enqueuedCount = 0
+    private var fullCount = 0
 
     // queue-confined (connect/disconnect hop onto it):
     private var deviceID: CMIODeviceID = 0
@@ -269,6 +286,7 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
         guard CMIOStreamCopyBufferQueue(sink, { _, _, _ in }, nil, &queueOut) == 0,
               let simpleQueue = queueOut?.takeRetainedValue() else { return false }
         guard CMIODeviceStartStream(device, sink) == 0 else { return false }
+        log.info("sink connected: device \(device) stream \(sink) capacity \(CMSimpleQueueGetCapacity(simpleQueue))")
         queue.sync {
             self.deviceID = device
             self.sinkStreamID = sink
@@ -327,13 +345,25 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen, let sinkQueue, sampleBuffer.isValid else { return }
+        receivedCount += 1
         // Only complete frames — SCK also delivers idle/blank status frames.
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let statusRaw = attachments.first?[.status] as? Int,
               statusRaw == SCFrameStatus.complete.rawValue else { return }
+        completeCount += 1
         lastBuffer = sampleBuffer
         lastEnqueueUptime = DispatchTime.now().uptimeNanoseconds
-        guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else { return }
+        guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else {
+            fullCount += 1
+            if fullCount % 90 == 1 {
+                log.info("sink queue FULL (\(self.fullCount)x) — extension not consuming?")
+            }
+            return
+        }
         CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(sampleBuffer).toOpaque())
+        enqueuedCount += 1
+        if enqueuedCount == 1 || enqueuedCount % 150 == 0 {
+            log.info("pipeline: received \(self.receivedCount) complete \(self.completeCount) enqueued \(self.enqueuedCount) full \(self.fullCount)")
+        }
     }
 }
