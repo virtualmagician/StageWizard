@@ -198,6 +198,10 @@ public final class OutputWindowManager {
         window.level = .floating
         window.isFloatingPanel = true
         window.becomesKeyOnlyIfNeeded = true
+        // Panels hide on app deactivate by default — rehearsal monitors (and
+        // the virtual-webcam monitor, which is CAPTURED) must stay visible
+        // while the operator works in other apps.
+        window.hidesOnDeactivate = false
         window.isOpaque = true
         window.backgroundColor = .black
         window.hasShadow = true
