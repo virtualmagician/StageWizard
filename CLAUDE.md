@@ -26,14 +26,18 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
    open-source prior art only (see README "Prior art").
 2. **Never push the local `full-history` branch.** The published history is a
    deliberate squash; `full-history` predates the name scrub.
-3. **Don't remove the "Strip cloud-sync xattrs" build phases** in project.yml.
+3. **Every codesign invocation must pass `--entitlements
+   Support/StageWizard.entitlements`** — re-signing without it silently strips
+   apple-events (deck import) and camera; the hardened runtime then refuses
+   the camera with no prompt while the Settings toggle looks fine.
+4. **Don't remove the "Strip cloud-sync xattrs" build phases** in project.yml.
    The repo lives in Dropbox (File Provider), which tags build products with
    xattrs that make codesign fail with "detritus not allowed".
-4. **Show-file compatibility:** never break decoding of older files. New model
+5. **Show-file compatibility:** never break decoding of older files. New model
    fields are optional or use `decodeIfPresent` with defaults; structural
    changes bump `ShowFile.currentFormatVersion` with a migration in
    `ShowFile.load`. Unknown cue types must keep decoding to `.broken`.
-5. **No third-party dependencies.** `package.sh` enforces system-frameworks-only.
+6. **No third-party dependencies.** `package.sh` enforces system-frameworks-only.
 
 ## Concurrency conventions (Swift 6 strict — these are load-bearing)
 

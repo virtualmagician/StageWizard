@@ -22,6 +22,9 @@ targets:
       path: Support/StageWizard.entitlements
       properties:
         com.apple.security.automation.apple-events: true
+        # Hardened runtime refuses camera access outright (no prompt, no TCC)
+        # without this — dev builds were unhardened so it went unnoticed.
+        com.apple.security.device.camera: true
     sources:
       - Sources
       - path: Support/AppIcon.icns

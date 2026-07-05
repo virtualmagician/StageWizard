@@ -38,7 +38,10 @@ if [[ -n "$DEVID" ]]; then
   echo ""
   echo "Signing with: $DEVID (hardened runtime)"
   xattr -cr "$APP"
-  codesign --force --options runtime --timestamp --sign "$DEVID" "$APP"
+  # --entitlements is load-bearing: re-signing without it STRIPS the
+  # apple-events + camera entitlements (hardened runtime then blocks both).
+  codesign --force --options runtime --timestamp \
+    --entitlements Support/StageWizard.entitlements --sign "$DEVID" "$APP"
   codesign --verify --strict --deep "$APP"
 
   if xcrun notarytool history --keychain-profile stagewizard-notary >/dev/null 2>&1; then

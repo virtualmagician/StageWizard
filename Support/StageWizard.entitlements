@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Slide-deck import scripts PowerPoint/Keynote to export PDFs.
-	     Hardened-runtime exception; TCC consent prompts at import time. -->
 	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
 	<true/>
 </dict>
 </plist>
