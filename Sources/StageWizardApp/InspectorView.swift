@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Bottom inspector for the selected cue, organized in tabs.
 /// Output tab is populated by the audio/video engine milestones.
@@ -238,11 +239,13 @@ private struct TimeAndLevelsTab: View {
 /// Shared timing/levels editing for audio + video cue bodies.
 private struct MediaTimingForm: View {
     @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
     let cueID: UUID
 
     var body: some View {
         if let cue = document.cue(withID: cueID) {
             Form {
+                mediaRow(for: cue)
                 trimEditor(for: cue)
                 TimecodeField(label: "Start (in)", value: mediaBinding(\.startTime) { $0.startTime = max(0, $1) })
                 HStack {
@@ -278,6 +281,74 @@ private struct MediaTimingForm: View {
             }
             .formStyle(.columns)
             .padding(12)
+            // Drop a replacement file anywhere on this tab to relink the cue.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !app.isShowMode, let url = urls.first,
+                      let cue = document.cue(withID: cueID),
+                      fileMatchesCueType(url, cue: cue) else { return false }
+                replaceMedia(with: url)
+                return true
+            }
+        }
+    }
+
+    /// Filename + found/missing status + always-available Choose… button.
+    @ViewBuilder
+    private func mediaRow(for cue: Cue) -> some View {
+        if let media = mediaReference(cue) {
+            let resolved = media.resolve(showFolder: document.showFolder)
+            HStack(spacing: 8) {
+                Image(systemName: resolved != nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(resolved != nil ? Theme.standby : .orange)
+                Text(media.fileName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(resolved?.path ?? "Missing — was at \(media.absolutePath)")
+                if resolved == nil {
+                    Text("missing")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button(resolved == nil ? "Relink…" : "Change…") { relink(cue: cue) }
+                    .disabled(app.isShowMode)
+                Text("or drop a file here")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(8)
+            .background(
+                (resolved == nil ? Color.orange.opacity(0.12) : Theme.insetBackground.opacity(0.6)),
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+        }
+    }
+
+    private func mediaReference(_ cue: Cue) -> MediaReference? {
+        switch cue.body {
+        case .audio(let body): return body.media
+        case .video(let body): return body.media
+        default: return nil
+        }
+    }
+
+    private func fileMatchesCueType(_ url: URL, cue: Cue) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        switch cue.body {
+        case .audio: return type.conforms(to: .audio)
+        case .video: return type.conforms(to: .movie) || type.conforms(to: .video)
+        default: return false
+        }
+    }
+
+    private func replaceMedia(with url: URL) {
+        let newRef = MediaReference(fileURL: url, showFolder: document.showFolder)
+        document.updateCue(cueID) { cue in
+            switch cue.body {
+            case .audio(var b): b.media = newRef; cue.body = .audio(b)
+            case .video(var b): b.media = newRef; cue.body = .video(b)
+            default: break
+            }
         }
     }
 
@@ -326,16 +397,9 @@ private struct MediaTimingForm: View {
             if case .audio = cue.body { return [.audio] }
             return [.movie, .video]
         }()
-        panel.message = "Locate the media file for cue \(cue.number)"
+        panel.message = "Choose the media file for cue \(cue.number)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let newRef = MediaReference(fileURL: url, showFolder: document.showFolder)
-        document.updateCue(cueID) { cue in
-            switch cue.body {
-            case .audio(var b): b.media = newRef; cue.body = .audio(b)
-            case .video(var b): b.media = newRef; cue.body = .video(b)
-            default: break
-            }
-        }
+        replaceMedia(with: url)
     }
 
     /// Uniform access to the fields audio and video bodies share.
