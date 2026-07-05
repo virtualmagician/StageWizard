@@ -45,6 +45,8 @@ final class VirtualCameraManager: NSObject {
     private let feed = SinkFeed()
     private var stream: SCStream?
     private var connectTask: Task<Void, Never>?
+    private var captureConfiguration: SCStreamConfiguration?
+    private var resizeObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.marcotempest.stagewizard", category: "virtualcam")
 
     override init() {
@@ -129,6 +131,11 @@ final class VirtualCameraManager: NSObject {
 
     func stopFeeding() {
         isFeeding = false
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+            self.resizeObserver = nil
+        }
+        captureConfiguration = nil
         let stream = stream
         self.stream = nil
         Task { try? await stream?.stopCapture() }
@@ -153,6 +160,8 @@ final class VirtualCameraManager: NSObject {
         // Window captures paste at native size into the top-left unless told
         // to scale — the camera frame must be full 1080p.
         configuration.scalesToFit = true
+        // Crop the title bar out or the 16:9 content gets pillarboxed.
+        configuration.sourceRect = Self.contentSourceRect(of: window)
         configuration.queueDepth = 5
 
         let stream = SCStream(
@@ -163,6 +172,29 @@ final class VirtualCameraManager: NSObject {
         try stream.addStreamOutput(feed, type: .screen, sampleHandlerQueue: feed.queue)
         try await stream.startCapture()
         self.stream = stream
+        self.captureConfiguration = configuration
+
+        // Track panel resizes: the crop rect is in points and must follow.
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let stream = self.stream,
+                      let configuration = self.captureConfiguration,
+                      let window = note.object as? NSWindow else { return }
+                configuration.sourceRect = Self.contentSourceRect(of: window)
+                stream.updateConfiguration(configuration)
+            }
+        }
+    }
+
+    /// The window's content region (title bar excluded), in the top-left
+    /// origin point coordinates SCK's sourceRect expects.
+    private static func contentSourceRect(of window: NSWindow) -> CGRect {
+        let frame = window.frame
+        let content = window.contentView?.frame ?? frame
+        let titleBarHeight = frame.height - content.height
+        return CGRect(x: 0, y: titleBarHeight, width: content.width, height: content.height)
     }
 }
 
