@@ -650,13 +650,15 @@ private struct TextContentTab: View {
                 RichTextEditor(rtf: Binding(
                     get: { text.rtf },
                     set: { _ in }   // writes flow through onEdit for atomicity
-                )) { rtf, plain in
+                ), backgroundColor: text.backgroundColor) { rtf, plain in
                     update { body in
                         body.rtf = rtf
                         body.plainPreview = String(plain.prefix(120))
                     }
                 }
-                .frame(minHeight: 120)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .frame(maxWidth: 600)
+                .frame(maxWidth: .infinity, alignment: .center)
 
                 HStack(spacing: 16) {
                     Button("Fonts…") {
