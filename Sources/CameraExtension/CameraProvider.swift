@@ -2,7 +2,10 @@ import Foundation
 import CoreMediaIO
 import CoreVideo
 import IOKit.audio
+import os
 import AppKit
+
+let extLog = Logger(subsystem: "com.marcotempest.stagewizard.camera", category: "extension")
 
 // The virtual "StageWizard Camera": a CoreMedia IO camera extension with a
 // SOURCE stream (what Zoom/Teams/OBS read) and a SINK stream (what the
@@ -34,8 +37,13 @@ final class CameraProviderSource: NSObject, CMIOExtensionProviderSource {
         }
     }
 
-    func connect(to client: CMIOExtensionClient) throws {}
-    func disconnect(from client: CMIOExtensionClient) {}
+    func connect(to client: CMIOExtensionClient) throws {
+        extLog.info("provider: client connected \(client.clientID)")
+    }
+
+    func disconnect(from client: CMIOExtensionClient) {
+        extLog.info("provider: client disconnected \(client.clientID)")
+    }
 
     var availableProperties: Set<CMIOExtensionProperty> {
         [.providerManufacturer]
@@ -66,6 +74,7 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     // stateQueue-confined:
     private var streamingCounter = 0
     private var sinkFeeding = false
+    private var sinkClient: CMIOExtensionClient?
     private var lastSinkFrameHostTime: UInt64 = 0
 
     init(localizedName: String) {
@@ -142,12 +151,14 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     // MARK: - Source stream lifecycle
 
     func startStreaming() {
-        stateQueue.sync { streamingCounter += 1 }
+        let count = stateQueue.sync { () -> Int in streamingCounter += 1; return streamingCounter }
+        extLog.info("source stream started: \(count) watcher(s)")
         startSplashTimerIfNeeded()
     }
 
     func stopStreaming() {
-        stateQueue.sync { streamingCounter = max(0, streamingCounter - 1) }
+        let count = stateQueue.sync { () -> Int in streamingCounter = max(0, streamingCounter - 1); return streamingCounter }
+        extLog.info("source stream stopped: \(count) watcher(s)")
     }
 
     /// Splash frames run at the nominal rate but only get SENT while no
@@ -232,40 +243,82 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
 
     // MARK: - Sink → source forwarding
 
+    private var consumedCount = 0
+    private var forwardedCount = 0
+    private var consumeErrorCount = 0
+
     func sinkStarted(client: CMIOExtensionClient) {
-        stateQueue.sync { sinkFeeding = true }
-        consumeBuffer(client)
+        extLog.info("sink started by client \(client.clientID, privacy: .public)")
+        stateQueue.sync {
+            sinkClient = client
+            sinkFeeding = true
+        }
+        consumeBuffer()
+    }
+
+    /// A NEW app instance authorized while the sink is already running (the
+    /// old instance died without stopping) — switch the consume loop over,
+    /// or its frames pile up in a queue nobody reads.
+    func adoptSinkClient(_ client: CMIOExtensionClient) {
+        let switched = stateQueue.sync { () -> Bool in
+            guard sinkFeeding, sinkClient?.clientID != client.clientID else {
+                sinkClient = client
+                return false
+            }
+            sinkClient = client
+            return true
+        }
+        if switched {
+            extLog.info("sink client switched to \(client.clientID, privacy: .public)")
+        }
     }
 
     func sinkStopped() {
+        extLog.info("sink stopped")
         stateQueue.sync {
             sinkFeeding = false
+            sinkClient = nil
             lastSinkFrameHostTime = 0
         }
     }
 
-    private func consumeBuffer(_ client: CMIOExtensionClient) {
-        let feeding = stateQueue.sync { sinkFeeding }
-        guard feeding else { return }
+    private func consumeBuffer() {
+        guard let client = (stateQueue.sync { sinkFeeding ? sinkClient : nil }) else { return }
         sinkStream.stream.consumeSampleBuffer(from: client) { [weak self] sampleBuffer, sequenceNumber, discontinuity, hasMoreSampleBuffers, error in
             guard let self else { return }
+            if let error {
+                self.consumeErrorCount += 1
+                if self.consumeErrorCount == 1 || self.consumeErrorCount % 50 == 0 {
+                    extLog.error("consumeSampleBuffer error #\(self.consumeErrorCount) from client \(client.clientID, privacy: .public): \((error as NSError).domain, privacy: .public) \((error as NSError).code) — \(error.localizedDescription, privacy: .public)")
+                }
+                // Persistent errors would otherwise spin hot.
+                self.stateQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.consumeBuffer()
+                }
+                return
+            }
             if let sampleBuffer {
                 let hostNanos = UInt64(CMClockGetTime(CMClockGetHostTimeClock()).seconds * 1_000_000_000)
                 let streaming = self.stateQueue.sync { () -> Bool in
                     self.lastSinkFrameHostTime = DispatchTime.now().uptimeNanoseconds
                     return self.streamingCounter > 0
                 }
+                self.consumedCount += 1
                 if streaming {
                     self.sourceStream.stream.send(
                         sampleBuffer, discontinuity: [], hostTimeInNanoseconds: hostNanos
                     )
+                    self.forwardedCount += 1
+                }
+                if self.consumedCount == 1 || self.consumedCount % 300 == 0 {
+                    extLog.info("sink consumed \(self.consumedCount), forwarded \(self.forwardedCount)")
                 }
                 let output = CMIOExtensionScheduledOutput(
                     sequenceNumber: sequenceNumber, hostTimeInNanoseconds: hostNanos
                 )
                 self.sinkStream.stream.notifyScheduledOutputChanged(output)
             }
-            self.consumeBuffer(client)
+            self.consumeBuffer()
         }
     }
 }
@@ -377,11 +430,14 @@ final class CameraSinkStreamSource: NSObject, CMIOExtensionStreamSource {
 
     func authorizedToStartStream(for client: CMIOExtensionClient) -> Bool {
         // Only our own app should feed the camera.
+        extLog.info("sink authorizedToStartStream for \(client.clientID, privacy: .public)")
         self.client = client
+        deviceSource?.adoptSinkClient(client)
         return true
     }
 
     func startStream() throws {
+        extLog.info("sink startStream (client known: \(self.client != nil))")
         guard let client else { return }
         deviceSource?.sinkStarted(client: client)
     }

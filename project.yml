@@ -115,7 +115,7 @@ targets:
         CFBundleDisplayName: StageWizard Camera
         NSSystemExtensionUsageDescription: The StageWizard Camera lets other apps (Zoom, Teams, OBS) receive StageWizard's show output as a webcam.
         CFBundleShortVersionString: "1.4.0"
-        CFBundleVersion: "6"
+        CFBundleVersion: "9"
         NSHumanReadableCopyright: "© 2026 MagicLab AG"
         CMIOExtension:
           CMIOExtensionMachServiceName: Z3U3NKMU2Y.com.marcotempest.stagewizard.camera
