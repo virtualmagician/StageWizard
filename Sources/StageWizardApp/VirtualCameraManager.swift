@@ -46,6 +46,7 @@ final class VirtualCameraManager: NSObject {
     private var stream: SCStream?
     private var connectTask: Task<Void, Never>?
     private var captureConfiguration: SCStreamConfiguration?
+    private var monitorWindow: NSWindow?
     private var resizeObserver: NSObjectProtocol?
     private let log = Logger(subsystem: "com.marcotempest.stagewizard", category: "virtualcam")
 
@@ -136,6 +137,7 @@ final class VirtualCameraManager: NSObject {
             self.resizeObserver = nil
         }
         captureConfiguration = nil
+        monitorWindow = nil
         let stream = stream
         self.stream = nil
         Task { try? await stream?.stopCapture() }
@@ -175,17 +177,20 @@ final class VirtualCameraManager: NSObject {
         self.captureConfiguration = configuration
 
         // Track panel resizes: the crop rect is in points and must follow.
+        self.monitorWindow = window
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: window, queue: .main
-        ) { [weak self] note in
-            MainActor.assumeIsolated {
-                guard let self, let stream = self.stream,
-                      let configuration = self.captureConfiguration,
-                      let window = note.object as? NSWindow else { return }
-                configuration.sourceRect = Self.contentSourceRect(of: window)
-                stream.updateConfiguration(configuration)
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshCaptureCrop()
             }
         }
+    }
+
+    private func refreshCaptureCrop() {
+        guard let stream, let configuration = captureConfiguration, let window = monitorWindow else { return }
+        configuration.sourceRect = Self.contentSourceRect(of: window)
+        Task { try? await stream.updateConfiguration(configuration) }
     }
 
     /// The window's content region (title bar excluded), in the top-left
