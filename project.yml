@@ -102,6 +102,7 @@ targets:
     info:
       path: Support/CameraExtensionInfo.plist
       properties:
+        CFBundlePackageType: SYSX
         CFBundleName: StageWizard Camera
         CFBundleDisplayName: StageWizard Camera
         CFBundleShortVersionString: "1.4.0"
