@@ -9,6 +9,7 @@ struct InspectorView: View {
 
     enum Tab: String, CaseIterable {
         case basics = "Basics"
+        case text = "Text"
         case timeAndLevels = "Time & Levels"
         case timeline = "Timeline"
         case geometry = "Geometry"
@@ -21,6 +22,7 @@ struct InspectorView: View {
             case .group: return [.basics, .timeline, .triggers]
             case .audio: return [.basics, .timeAndLevels, .output, .triggers]
             case .video, .camera, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
+            case .text: return [.basics, .text, .timeAndLevels, .geometry, .output, .triggers]
             case .fade, .stop: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
@@ -50,6 +52,8 @@ struct InspectorView: View {
                             switch activeTab {
                             case .basics:
                                 BasicsTab(cueID: cueID)
+                            case .text:
+                                TextContentTab(cueID: cueID)
                             case .timeAndLevels:
                                 TimeAndLevelsTab(cueID: cueID, body: cue.body)
                             case .output:
@@ -322,6 +326,8 @@ private struct TimeAndLevelsTab: View {
             CameraTimingForm(cueID: cueID)
         case .image:
             ImageTimingForm(cueID: cueID)
+        case .text:
+            TextTimingForm(cueID: cueID)
         case .slide:
             SlideTimingForm(cueID: cueID)
         case .fade:
@@ -632,6 +638,137 @@ private struct ImageOutputSettings: View {
     }
 }
 
+/// The Text tab: rich editor + background controls, all pushing live.
+private struct TextContentTab: View {
+    @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .text(let text) = cue.body {
+            VStack(alignment: .leading, spacing: 8) {
+                RichTextEditor(rtf: Binding(
+                    get: { text.rtf },
+                    set: { _ in }   // writes flow through onEdit for atomicity
+                )) { rtf, plain in
+                    update { body in
+                        body.rtf = rtf
+                        body.plainPreview = String(plain.prefix(120))
+                    }
+                }
+                .frame(minHeight: 120)
+
+                HStack(spacing: 16) {
+                    Button("Fonts…") {
+                        NSFontManager.shared.orderFrontFontPanel(nil)
+                    }
+                    .help("Select text, then choose a font — standard macOS Fonts panel")
+
+                    Toggle("Transparent background", isOn: Binding(
+                        get: { text.backgroundColor == nil },
+                        set: { transparent in
+                            update { $0.backgroundColor = transparent ? nil : RGBAColor(red: 0, green: 0, blue: 0) }
+                        }
+                    ))
+
+                    if let bg = text.backgroundColor {
+                        ColorPicker("Background", selection: Binding(
+                            get: { Color(red: bg.red, green: bg.green, blue: bg.blue, opacity: bg.alpha) },
+                            set: { color in
+                                let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .black
+                                update {
+                                    $0.backgroundColor = RGBAColor(
+                                        red: resolved.redComponent, green: resolved.greenComponent,
+                                        blue: resolved.blueComponent, alpha: resolved.alphaComponent
+                                    )
+                                }
+                            }
+                        ), supportsOpacity: true)
+                    }
+                    Spacer()
+                }
+            }
+            .padding(12)
+            .disabled(app.isShowMode)
+        }
+    }
+
+    private func update(_ change: (inout TextBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .text(var b) = cue.body {
+                change(&b)
+                cue.body = .text(b)
+            }
+        }
+        app.pushText(cueID: cueID)
+    }
+}
+
+/// Text holds until stopped — only the edge fades are editable here.
+private struct TextTimingForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .text(let text) = cue.body {
+            Form {
+                Text("Text — holds until stopped by a stop cue, panic, or the Active Cues panel.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TimecodeField(label: "Fade in", value: Binding(
+                    get: { text.fadeInDuration },
+                    set: { v in update { $0.fadeInDuration = max(0, v) } }
+                ))
+                TimecodeField(label: "Fade out", value: Binding(
+                    get: { text.fadeOutDuration },
+                    set: { v in update { $0.fadeOutDuration = max(0, v) } }
+                ))
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout TextBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .text(var b) = cue.body {
+                change(&b)
+                cue.body = .text(b)
+            }
+        }
+    }
+}
+
+private struct TextOutputSettings: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .text(let text) = cue.body {
+            Form {
+                OutputGroupPicker(selection: Binding(
+                    get: { text.outputGroupID },
+                    set: { v in
+                        document.updateCue(cueID) { cue in
+                            if case .text(var b) = cue.body {
+                                b.outputGroupID = v
+                                cue.body = .text(b)
+                            }
+                        }
+                    }
+                ))
+                if text.outputGroupID == nil {
+                    Label("No output assigned — the text won't play.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+}
+
 /// Slides hold until stopped/replaced — fades + deck info + reconversion.
 private struct SlideTimingForm: View {
     @Environment(ShowDocumentController.self) private var document
@@ -808,7 +945,7 @@ struct CueTargetPicker: View {
 extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
-        case .audio, .video, .camera, .image, .slide, .group: return true
+        case .audio, .video, .camera, .image, .text, .slide, .group: return true
         case .fade, .stop, .broken: return false
         }
     }
@@ -840,6 +977,8 @@ private struct OutputTab: View {
             CameraOutputSettings(cueID: cueID)
         case .image:
             ImageOutputSettings(cueID: cueID)
+        case .text:
+            TextOutputSettings(cueID: cueID)
         case .slide:
             SlideOutputSettings(cueID: cueID)
         default:

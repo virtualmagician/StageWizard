@@ -217,6 +217,7 @@ final class AppModel {
         case .camera(let body): (body.geometry, body.fillMode, body.layer)
         case .image(let body): (body.geometry, body.fillMode, body.layer)
         case .slide(let body): (body.geometry, body.fillMode, body.layer)
+        case .text(let body): (body.geometry, .stretch, body.layer)
         default: nil
         }
         guard let (geometry, fillMode, renderLayer) = settings else { return }
@@ -227,6 +228,17 @@ final class AppModel {
             (instance.player as? VideoCuePlayer)?.applyRenderLayer(renderLayer)
             (instance.player as? CameraCuePlayer)?.applyRenderLayer(renderLayer)
             (instance.player as? StillCuePlayer)?.applyRenderLayer(renderLayer)
+            (instance.player as? TextCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
+            (instance.player as? TextCuePlayer)?.applyRenderLayer(renderLayer)
+        }
+    }
+
+    /// Push a text cue's content to any running instances — the Text tab
+    /// calls this after every edit so the stage updates as you type.
+    func pushText(cueID: UUID) {
+        guard let cue = document.cue(withID: cueID), case .text(let body) = cue.body else { return }
+        for instance in transport.registry.instances where instance.cue.id == cueID {
+            (instance.player as? TextCuePlayer)?.applyText(body)
         }
     }
 

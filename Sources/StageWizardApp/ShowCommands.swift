@@ -73,6 +73,9 @@ struct ShowCommands: Commands {
             Button("Add Image Cue…") { CueFactory.addMediaCue(kind: .image, to: document) }
                 .keyboardShortcut("8", modifiers: [.command, .shift])
                 .disabled(app.isShowMode)
+            Button("Add Text Cue") { CueFactory.addControlCue(.text(CueFactory.defaultTextBody()), to: document) }
+                .keyboardShortcut("9", modifiers: [.command, .shift])
+                .disabled(app.isShowMode)
             Divider()
             Button("Renumber All Cues") { CueFactory.renumberAll(in: document) }
                 .disabled(app.isShowMode)
@@ -123,12 +126,31 @@ enum CueFactory {
 
     static func addControlCue(_ body: CueBody, to document: ShowDocumentController) {
         var body = body
-        // New camera cues route to the first output group, like video.
+        // New camera/text cues route to the first output group, like video.
         if case .camera(var camera) = body, camera.outputGroupID == nil {
             camera.outputGroupID = defaultOutputGroupID(in: document)
             body = .camera(camera)
         }
+        if case .text(var text) = body, text.outputGroupID == nil {
+            text.outputGroupID = defaultOutputGroupID(in: document)
+            body = .text(text)
+        }
         insert(Cue(number: document.show.nextCueNumber(), body: body), into: document)
+    }
+
+    /// Starter content for a new text cue: big, bold, white, centered.
+    static func defaultTextBody() -> TextBody {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributed = NSAttributedString(string: "Text", attributes: [
+            .font: NSFont.systemFont(ofSize: 96, weight: .bold),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraph,
+        ])
+        let rtf = attributed.rtf(
+            from: NSRange(location: 0, length: attributed.length), documentAttributes: [:]
+        ) ?? Data()
+        return TextBody(rtf: rtf)
     }
 
     /// Outputs are required (no implicit main-display target) — new video and

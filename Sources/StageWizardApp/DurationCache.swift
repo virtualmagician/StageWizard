@@ -39,7 +39,7 @@ final class DurationCache {
             return body.duration
         case .stop(let body):
             return body.fadeOutTime
-        case .camera, .image, .slide, .broken:
+        case .camera, .image, .text, .slide, .broken:
             return nil
         case .group(let body) where body.mode == .enterAndPlayFirst:
             return nil   // GO-driven container — no fixed duration

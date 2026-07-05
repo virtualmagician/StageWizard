@@ -71,6 +71,12 @@ final class EnginePlayerProvider: CuePlayerProviding {
             )
             return try await StillCuePlayer.arm(body: body, imageURL: url, targets: targets)
 
+        case .text(let body):
+            let targets = try resolveTargets(
+                groupID: body.outputGroupID, legacy: nil, cueNumber: cue.number
+            )
+            return try await TextCuePlayer.arm(body: body, targets: targets)
+
         case .fade, .stop, .group, .broken:
             throw ArmError.notAMediaCue
         }

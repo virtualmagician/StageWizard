@@ -8,6 +8,7 @@ public enum CueBody: Hashable, Sendable {
     case video(VideoBody)
     case camera(CameraBody)
     case image(ImageBody)
+    case text(TextBody)
     case slide(SlideBody)
     case fade(FadeBody)
     case stop(StopBody)
@@ -20,6 +21,11 @@ public enum CueBody: Hashable, Sendable {
         case .video(let body): return body.media.fileName
         case .camera(let body): return body.cameraName ?? "Camera"
         case .image(let body): return body.media.fileName
+        case .text(let body):
+            let firstLine = body.plainPreview
+                .components(separatedBy: .newlines).first?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            return firstLine.isEmpty ? "Text" : String(firstLine.prefix(40))
         case .slide(let body):
             if let index = body.slideIndex, let count = body.slideCount {
                 return "\(body.deckName) · \(index)/\(count)"
@@ -38,6 +44,7 @@ public enum CueBody: Hashable, Sendable {
         case .video: return "Video"
         case .camera: return "Camera"
         case .image: return "Image"
+        case .text: return "Text"
         case .slide: return "Slide"
         case .fade: return "Fade"
         case .stop: return "Stop"
@@ -53,7 +60,7 @@ extension CueBody: Codable {
     }
 
     private enum Kind: String, Codable {
-        case audio, video, camera, image, slide, fade, stop, group
+        case audio, video, camera, image, text, slide, fade, stop, group
     }
 
     public init(from decoder: Decoder) throws {
@@ -64,6 +71,7 @@ extension CueBody: Codable {
         case .video: self = .video(try VideoBody(from: decoder))
         case .camera: self = .camera(try CameraBody(from: decoder))
         case .image: self = .image(try ImageBody(from: decoder))
+        case .text: self = .text(try TextBody(from: decoder))
         case .slide: self = .slide(try SlideBody(from: decoder))
         case .fade: self = .fade(try FadeBody(from: decoder))
         case .stop: self = .stop(try StopBody(from: decoder))
@@ -86,6 +94,9 @@ extension CueBody: Codable {
             try body.encode(to: encoder)
         case .image(let body):
             try container.encode(Kind.image, forKey: .type)
+            try body.encode(to: encoder)
+        case .text(let body):
+            try container.encode(Kind.text, forKey: .type)
             try body.encode(to: encoder)
         case .slide(let body):
             try container.encode(Kind.slide, forKey: .type)
@@ -407,6 +418,78 @@ public struct ImageBody: Codable, Hashable, Sendable {
         media = try c.decode(MediaReference.self, forKey: .media)
         outputGroupID = try c.decodeIfPresent(UUID.self, forKey: .outputGroupID)
         fillMode = try c.decode(FillMode.self, forKey: .fillMode)
+        geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
+        fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
+        fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
+    }
+}
+
+/// Model-level RGBA color (0…1 components) — ShowModel stays AppKit-free.
+public struct RGBAColor: Codable, Hashable, Sendable {
+    public var red: Double
+    public var green: Double
+    public var blue: Double
+    public var alpha: Double
+
+    public init(red: Double, green: Double, blue: Double, alpha: Double = 1) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+}
+
+/// Rich text on stage outputs — titles, lower thirds, prompter notes.
+/// Content is RTF (pasted formatting survives); rendered to a bitmap at the
+/// stage's size at arm/edit time. Indefinite: holds until stopped.
+public struct TextBody: Codable, Hashable, Sendable {
+    /// The rich text, as RTF data (NSAttributedString round-trip).
+    public var rtf: Data
+    /// First line of the plain text, maintained by the editor — used for the
+    /// cue's default name without needing AppKit in the model layer.
+    public var plainPreview: String
+    /// nil = transparent (layers behind show through).
+    public var backgroundColor: RGBAColor?
+    /// Virtual output; nil = unassigned (won't play), like video.
+    public var outputGroupID: UUID?
+    public var geometry: VideoGeometry
+    public var fadeInDuration: TimeInterval
+    public var fadeOutDuration: TimeInterval
+    /// Render order on the output, 1 (background) … 10 (front).
+    public var layer: Int
+
+    public init(
+        rtf: Data,
+        plainPreview: String = "Text",
+        backgroundColor: RGBAColor? = nil,
+        outputGroupID: UUID? = nil,
+        geometry: VideoGeometry = .fillStage,
+        fadeInDuration: TimeInterval = 0,
+        fadeOutDuration: TimeInterval = 0,
+        layer: Int = 5
+    ) {
+        self.rtf = rtf
+        self.plainPreview = plainPreview
+        self.backgroundColor = backgroundColor
+        self.outputGroupID = outputGroupID
+        self.geometry = geometry
+        self.fadeInDuration = fadeInDuration
+        self.fadeOutDuration = fadeOutDuration
+        self.layer = layer.clampedToLayerRange
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case rtf, plainPreview, backgroundColor, outputGroupID, geometry
+        case fadeInDuration, fadeOutDuration, layer
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        rtf = try c.decode(Data.self, forKey: .rtf)
+        plainPreview = try c.decodeIfPresent(String.self, forKey: .plainPreview) ?? "Text"
+        backgroundColor = try c.decodeIfPresent(RGBAColor.self, forKey: .backgroundColor)
+        outputGroupID = try c.decodeIfPresent(UUID.self, forKey: .outputGroupID)
         geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)

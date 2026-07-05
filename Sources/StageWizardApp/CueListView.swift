@@ -387,6 +387,9 @@ struct CueRowView: View {
         } else if case .image = cue.body {
             Text("∞")
                 .foregroundStyle(.secondary)
+        } else if case .text = cue.body {
+            Text("∞")
+                .foregroundStyle(.secondary)
         } else if let duration = DurationCache.shared.effectiveDuration(
             of: cue, in: document.show, showFolder: document.showFolder
         ) {
@@ -444,6 +447,7 @@ struct CueRowView: View {
         case .video(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
         case .camera(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
         case .image(let body): groupID = .some(body.outputGroupID)
+        case .text(let body): groupID = .some(body.outputGroupID)
         case .slide(let body): groupID = .some(body.outputGroupID)
         default: return false
         }
@@ -496,6 +500,7 @@ func typeSymbol(_ body: CueBody) -> String {
     case .video: return "film"
     case .camera: return "video.fill"
     case .image: return "photo.fill"
+    case .text: return "textformat"
     case .slide: return "photo"
     case .fade: return "dial.low"
     case .stop: return "stop.fill"

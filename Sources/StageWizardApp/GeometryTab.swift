@@ -30,7 +30,7 @@ struct GeometryTab: View {
                     }
                     .frame(width: 240)
 
-                    if geometry.mode == .fillStage {
+                    if geometry.mode == .fillStage, hasFillMode(cue) {
                         Picker("Style", selection: fillModeBinding(cue)) {
                             Text("Fit").tag(FillMode.fit)
                             Text("Fill").tag(FillMode.fill)
@@ -109,8 +109,15 @@ struct GeometryTab: View {
         case .camera(let body): return body.layer
         case .image(let body): return body.layer
         case .slide(let body): return body.layer
+        case .text(let body): return body.layer
         default: return 5
         }
+    }
+
+    /// Text renders its own canvas at stage size — no fit/fill/stretch.
+    private func hasFillMode(_ cue: Cue) -> Bool {
+        if case .text = cue.body { return false }
+        return true
     }
 
     private func layerBinding(_ cue: Cue) -> Binding<Int> {
@@ -123,6 +130,7 @@ struct GeometryTab: View {
                     case .camera(var body): body.layer = newValue; cue.body = .camera(body)
                     case .image(var body): body.layer = newValue; cue.body = .image(body)
                     case .slide(var body): body.layer = newValue; cue.body = .slide(body)
+                    case .text(var body): body.layer = newValue; cue.body = .text(body)
                     default: break
                     }
                 }
@@ -137,6 +145,7 @@ struct GeometryTab: View {
         case .camera(let body): return body.geometry
         case .image(let body): return body.geometry
         case .slide(let body): return body.geometry
+        case .text(let body): return body.geometry
         default: return nil
         }
     }
@@ -174,6 +183,7 @@ struct GeometryTab: View {
             case .camera(var body): change(&body.geometry); cue.body = .camera(body)
             case .image(var body): change(&body.geometry); cue.body = .image(body)
             case .slide(var body): change(&body.geometry); cue.body = .slide(body)
+            case .text(var body): change(&body.geometry); cue.body = .text(body)
             default: break
             }
         }
