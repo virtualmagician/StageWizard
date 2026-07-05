@@ -143,7 +143,11 @@ enum SlideDeckImporter {
         children.append(stop)
 
         document.mutate { show in
-            var index = insertIndex.map { min($0, show.cues.count) } ?? show.cues.count
+            // Decks are top-level groups — dropping one into the middle of
+            // another group's child block slides down to the block boundary.
+            var index = CueFactory.topLevelInsertionIndex(
+                at: insertIndex ?? show.cues.count, in: show.cues
+            )
             var group = groupCue
             let groupNumber = show.nextCueNumber()
             group.number = groupNumber

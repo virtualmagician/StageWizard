@@ -94,6 +94,108 @@ final class V6Tests: XCTestCase {
         XCTAssertEqual(updated.volumeDB, -6, "volume survives a media swap")
     }
 
+    // MARK: - Drag seam rule (landing parent by BOTH neighbors)
+
+    /// [group, c1, c2, loose] — one open group with two children, one
+    /// top-level cue after the block.
+    private func seamFixture() -> (document: ShowDocumentController, group: Cue, c1: Cue, c2: Cue, loose: Cue) {
+        let document = ShowDocumentController()
+        let group = Cue(number: "10", body: .group(GroupBody()))
+        var c1 = Cue(number: "10.1", body: .stop(StopBody()))
+        var c2 = Cue(number: "10.2", body: .stop(StopBody()))
+        c1.parentID = group.id
+        c2.parentID = group.id
+        let loose = Cue(number: "20", body: .stop(StopBody()))
+        document.mutate { $0.cues = [group, c1, c2, loose] }
+        return (document, group, c1, c2, loose)
+    }
+
+    func testDragChildToSeamBelowGroupExtractsIt() {
+        let (document, group, c1, _, _) = seamFixture()
+        // Drag c1 (index 1) to the seam below the block (before "loose").
+        CueFactory.moveCues(in: document, from: IndexSet(integer: 1), to: 3)
+        XCTAssertNil(document.show.cue(withID: c1.id)?.parentID,
+                     "the seam below a group is the way OUT of it")
+        XCTAssertEqual(document.show.cues.map(\.number), ["10", "10.2", "10.1", "20"])
+        _ = group
+    }
+
+    func testDragChildToEndOfListExtractsIt() {
+        let (document, _, c1, _, _) = seamFixture()
+        CueFactory.moveCues(in: document, from: IndexSet(integer: 1), to: 4)
+        XCTAssertNil(document.show.cue(withID: c1.id)?.parentID,
+                     "extraction works even when nothing follows the group")
+    }
+
+    func testDragLooseCueToSeamBelowGroupIsNotAbsorbed() {
+        let (document, _, _, _, loose) = seamFixture()
+        // Drag "loose" (index 3) up to the seam right below c2 (index 3 → same
+        // spot via index 3 after removing? use destination 3: between c2 and loose).
+        CueFactory.moveCues(in: document, from: IndexSet(integer: 3), to: 3)
+        XCTAssertNil(document.show.cue(withID: loose.id)?.parentID,
+                     "block boundary never absorbs")
+    }
+
+    func testDragLooseCueBetweenChildrenJoinsGroup() {
+        let (document, group, _, _, loose) = seamFixture()
+        // Drop strictly between c1 (index 1) and c2 (index 2).
+        CueFactory.moveCues(in: document, from: IndexSet(integer: 3), to: 2)
+        XCTAssertEqual(document.show.cue(withID: loose.id)?.parentID, group.id,
+                       "strictly inside the child block joins the group")
+        XCTAssertEqual(document.show.cues.map(\.number), ["10", "10.1", "20", "10.2"])
+    }
+
+    func testDragUnderCollapsedEmptyGroupStaysTopLevel() {
+        let document = ShowDocumentController()
+        let group = Cue(number: "10", body: .group(GroupBody(collapsed: true)))
+        let loose = Cue(number: "20", body: .stop(StopBody()))
+        document.mutate { $0.cues = [loose, group] }
+        // Drag "loose" below the collapsed header.
+        CueFactory.moveCues(in: document, from: IndexSet(integer: 0), to: 2)
+        XCTAssertNil(document.show.cue(withID: loose.id)?.parentID,
+                     "a collapsed header never captures drops")
+    }
+
+    func testMoveOutOfGroupCommand() {
+        let (document, group, c1, c2, _) = seamFixture()
+        document.selection = [c1.id]
+        CueFactory.moveOutOfGroup(in: document)
+        XCTAssertNil(document.show.cue(withID: c1.id)?.parentID)
+        XCTAssertEqual(document.show.cue(withID: c2.id)?.parentID, group.id, "siblings stay put")
+        XCTAssertEqual(document.show.cues.map(\.number), ["10", "10.2", "10.1", "20"],
+                       "extracted cue lands right after its group block")
+    }
+
+    func testHeaderDraggedWithOwnChildKeepsChildInGroup() {
+        let (document, group, c1, _, _) = seamFixture()
+        // Multi-select the header (0) and c1 (1); drag both to the end.
+        CueFactory.moveCues(in: document, from: IndexSet([0, 1]), to: 4)
+        XCTAssertEqual(document.show.cue(withID: c1.id)?.parentID, group.id,
+                       "a child moved together with its header travels with the group")
+        XCTAssertNil(document.show.cue(withID: group.id)?.parentID)
+        // Block re-glues wherever the header landed.
+        XCTAssertEqual(document.show.cues.map(\.number), ["20", "10", "10.1", "10.2"])
+    }
+
+    func testDeckDroppedInsideGroupSlidesToBlockBoundary() {
+        let (document, group, _, c2, _) = seamFixture()
+        let app = AppModel()
+        // Deck dropped between the two children (flat index 2).
+        SlideDeckImporter.insertSlideCues(
+            images: [URL(fileURLWithPath: "/cache/slide-001.png")],
+            deckURL: URL(fileURLWithPath: "/decks/Talk.pptx"),
+            at: 2, into: document, app: app
+        )
+        // The deck group must start after the host group's child block.
+        let cues = document.show.cues
+        let deckHeaderIndex = cues.firstIndex { $0.name == "Talk" }
+        XCTAssertEqual(deckHeaderIndex, 3, "deck slides past the child block")
+        XCTAssertEqual(cues[1].parentID, group.id)
+        XCTAssertEqual(cues[2].id, c2.id)
+        XCTAssertEqual(cues[2].parentID, group.id, "host group's block stays intact")
+        XCTAssertNil(cues[3].parentID, "deck group is top-level")
+    }
+
     // MARK: - Player reuse
 
     func testStillPlayerArmsFromImageBody() async throws {

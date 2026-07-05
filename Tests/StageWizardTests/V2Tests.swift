@@ -82,21 +82,41 @@ final class V2Tests: XCTestCase {
         XCTAssertEqual(document.selection.count, 3, "dropped cues are selected")
     }
 
-    func testImportMediaInsertsInsideGroupContext() {
+    func testImportMediaInsideChildBlockJoinsGroup() {
+        let document = ShowDocumentController()
+        let group = Cue(number: "10", body: .group(GroupBody()))
+        var c1 = Cue(number: "10.1", body: .stop(StopBody()))
+        var c2 = Cue(number: "10.2", body: .stop(StopBody()))
+        c1.parentID = group.id
+        c2.parentID = group.id
+        document.mutate { $0.cues = [group, c1, c2] }
+
+        // Strictly between two children → deliberately inside the group.
+        CueFactory.importMedia(
+            urls: [URL(fileURLWithPath: "/fake/bed.wav")],
+            at: 2,
+            into: document
+        )
+        XCTAssertEqual(document.show.cues.count, 4)
+        XCTAssertEqual(document.show.cues[2].parentID, group.id, "drop between children joins the group")
+    }
+
+    func testImportMediaBelowGroupBlockStaysTopLevel() {
         let document = ShowDocumentController()
         let group = Cue(number: "10", body: .group(GroupBody()))
         var child = Cue(number: "10.1", body: .stop(StopBody()))
         child.parentID = group.id
         document.mutate { $0.cues = [group, child] }
 
-        // Insert at the child's index +1 → lands inside the group.
+        // The seam below the last child is a block boundary — files dropped
+        // there must NOT be absorbed into the group.
         CueFactory.importMedia(
             urls: [URL(fileURLWithPath: "/fake/bed.wav")],
             at: 2,
             into: document
         )
         XCTAssertEqual(document.show.cues.count, 3)
-        XCTAssertEqual(document.show.cues[2].parentID, group.id, "drop after a child joins the group")
+        XCTAssertNil(document.show.cues[2].parentID, "drop below the group lands at top level")
     }
 
     // MARK: - Timecode precision

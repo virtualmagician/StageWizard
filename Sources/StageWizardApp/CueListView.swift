@@ -76,6 +76,12 @@ struct CueListView: View {
                     Divider()
                 }
                 if !app.isShowMode {
+                    if ids.contains(where: { document.show.cue(withID: $0)?.parentID != nil }) {
+                        Button("Move Out of Group") {
+                            document.selection = ids
+                            CueFactory.moveOutOfGroup(in: document)
+                        }
+                    }
                     Button("Duplicate") {
                         document.selection = ids
                         CueFactory.duplicateSelection(in: document)

@@ -192,34 +192,91 @@ enum CueFactory {
         document.selection = [cue.id]
     }
 
-    /// Drag-reorder with structure maintenance: moved plain cues adopt the
-    /// group they land in; group headers travel with their children; every
-    /// child block is re-glued directly after its header.
+    /// Group membership for content landing at a seam in the flat cue
+    /// array, judged by BOTH neighbors. Strictly inside a group's child
+    /// block (or directly under its open header) joins the group; every
+    /// block boundary — including the seam right below a group's last
+    /// child — is top-level. So dropping just below a group pulls a child
+    /// OUT, and nothing dropped after a group is ever absorbed into it.
+    static func landingParent(above: Cue?, below: Cue?) -> UUID? {
+        guard let above else { return nil }
+        if case .group(let body) = above.body {
+            // Under an open header is the deliberate "into the group" spot;
+            // under a collapsed header everything lands outside.
+            return body.collapsed ? nil : above.id
+        }
+        guard let parent = above.parentID else { return nil }
+        return below?.parentID == parent ? parent : nil
+    }
+
+    /// Nearest index at or after `index` that is NOT inside a group's child
+    /// block — where a top-level block (a group header + children) may be
+    /// inserted without breaking the children-follow-header invariant.
+    static func topLevelInsertionIndex(at index: Int, in cues: [Cue]) -> Int {
+        var index = min(max(index, 0), cues.count)
+        while index < cues.count, cues[index].parentID != nil {
+            index += 1
+        }
+        return index
+    }
+
+    /// Drag-reorder with structure maintenance: the moved run is parented by
+    /// the seam it lands in (see `landingParent`); group headers travel with
+    /// their children; every child block is re-glued after its header.
     static func moveCues(in document: ShowDocumentController, from source: IndexSet, to destination: Int) {
         document.mutate { show in
-            let movedIDs = source.map { show.cues[$0].id }
+            // A moved header takes its whole child block along, so children
+            // keep their order no matter which rows were physically dragged.
+            var expanded = source
+            for offset in source {
+                if case .group = show.cues[offset].body {
+                    let headerID = show.cues[offset].id
+                    for index in show.cues.indices where show.cues[index].parentID == headerID {
+                        expanded.insert(index)
+                    }
+                }
+            }
+            let movedIDs = Set(expanded.map { show.cues[$0].id })
             var cues = show.cues
-            cues.move(fromOffsets: source, toOffset: destination)
+            cues.move(fromOffsets: expanded, toOffset: destination)
 
-            // Moved plain cues adopt the group context at the landing spot.
-            for id in movedIDs {
-                guard let index = cues.firstIndex(where: { $0.id == id }) else { continue }
+            // The moved cues are now one contiguous run — judge the landing
+            // seam once, by the unmoved neighbors on either side of the run.
+            let indexes = cues.indices.filter { movedIDs.contains(cues[$0].id) }
+            guard let first = indexes.first, let last = indexes.last else { return }
+            let landing = landingParent(
+                above: first > 0 ? cues[first - 1] : nil,
+                below: last + 1 < cues.count ? cues[last + 1] : nil
+            )
+            let movedGroupIDs = Set(indexes.compactMap { index -> UUID? in
+                if case .group = cues[index].body { return cues[index].id }
+                return nil
+            })
+            for index in indexes {
                 if case .group = cues[index].body {
                     cues[index].parentID = nil   // groups stay top-level (single-level nesting in UI)
+                } else if let parent = cues[index].parentID, movedGroupIDs.contains(parent) {
+                    // Child dragged together with its own header: it travels
+                    // with its group, wherever the group lands.
                     continue
-                }
-                let above = index > 0 ? cues[index - 1] : nil
-                if let above {
-                    if case .group = above.body {
-                        cues[index].parentID = above.id
-                    } else {
-                        cues[index].parentID = above.parentID
-                    }
                 } else {
-                    cues[index].parentID = nil
+                    cues[index].parentID = landing
                 }
             }
             show.cues = normalized(cues)
+        }
+    }
+
+    /// Explicit escape hatch for drag-averse structure edits: selected
+    /// children pop out to top level, landing right after their group block.
+    static func moveOutOfGroup(in document: ShowDocumentController) {
+        let selection = document.selection
+        document.mutate { show in
+            for index in show.cues.indices where selection.contains(show.cues[index].id) {
+                if case .group = show.cues[index].body { continue }
+                show.cues[index].parentID = nil
+            }
+            show.cues = normalized(show.cues)
         }
     }
 
@@ -277,19 +334,20 @@ enum CueFactory {
 
         document.mutate { show in
             var index = insertAtCueIndex.map { min($0, show.cues.count) } ?? show.cues.count
-            // Dropping inside a group's child block joins the group.
-            let parentID: UUID? = {
-                guard index > 0, index <= show.cues.count else { return nil }
-                let above = show.cues[index - 1]
-                if case .group = above.body { return nil }   // right under a header: stay top-level on drop
-                return above.parentID
-            }()
+            // Files join a group only when dropped strictly inside its child
+            // block (or right under its open header) — block boundaries are
+            // top-level, so nothing is absorbed by dropping below a group.
+            let parentID = landingParent(
+                above: index > 0 ? show.cues[index - 1] : nil,
+                below: index < show.cues.count ? show.cues[index] : nil
+            )
             for var cue in newCues {
                 cue.number = show.nextCueNumber()
                 cue.parentID = parentID
                 show.cues.insert(cue, at: index)
                 index += 1
             }
+            show.cues = normalized(show.cues)
         }
         document.selection = Set(newCues.map(\.id))
         return skipped
