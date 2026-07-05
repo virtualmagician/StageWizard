@@ -70,6 +70,8 @@ struct ContentView: View {
                 Button("Audio Cue…") { CueFactory.addMediaCue(kind: .audio, to: document) }
                 Button("Video Cue…") { CueFactory.addMediaCue(kind: .video, to: document) }
                 Button("Camera Cue") { CueFactory.addControlCue(.camera(CameraBody()), to: document) }
+                Button("Image Cue…") { CueFactory.addMediaCue(kind: .image, to: document) }
+                Button("Slides from Deck…") { SlideDeckImporter.importDeckViaPanel(into: document, app: app) }
                 Divider()
                 Button("Fade Cue") { CueFactory.addControlCue(.fade(FadeBody()), to: document) }
                 Button("Stop Cue") { CueFactory.addControlCue(.stop(StopBody()), to: document) }

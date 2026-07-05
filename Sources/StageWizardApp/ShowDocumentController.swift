@@ -93,12 +93,18 @@ final class ShowDocumentController {
             selection = []
             isDirty = false
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            UserDefaults.standard.set(url.path, forKey: Self.lastShowPathKey)
             onRecentsChanged?()
             onDocumentReplaced?()
         } catch {
             presentError("Couldn't open \(url.lastPathComponent)", error)
         }
     }
+
+    /// Most recent successfully opened/saved show — restored at launch.
+    /// (NSDocumentController's recents list loads asynchronously and can be
+    /// empty during applicationDidFinishLaunching, so we keep our own copy.)
+    static let lastShowPathKey = "lastShowPath"
 
     /// Quit-time gate: returns true when it's safe to terminate.
     func confirmQuit() -> Bool {
@@ -129,6 +135,7 @@ final class ShowDocumentController {
             fileURL = url
             isDirty = false
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            UserDefaults.standard.set(url.path, forKey: Self.lastShowPathKey)
             onRecentsChanged?()
             return true
         } catch {

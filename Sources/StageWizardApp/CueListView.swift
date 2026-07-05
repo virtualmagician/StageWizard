@@ -55,6 +55,13 @@ struct CueListView: View {
                 }
             }
             .listStyle(.plain)
+            // .onInsert lives on the ForEach — an empty list has no drop
+            // zones at all, so a brand-new show couldn't accept files.
+            .overlay {
+                if rows.isEmpty && !app.isShowMode {
+                    emptyDropTarget
+                }
+            }
             .onCopyCommand {
                 copyProviders()
             }
@@ -183,18 +190,43 @@ struct CueListView: View {
                     urls.append(url)
                 }
             }
-            guard !urls.isEmpty else { return }
-            // Presentation decks take the slide-import pipeline.
-            let decks = urls.filter { SlideDeckImporter.isDeck($0) }
-            let media = urls.filter { !SlideDeckImporter.isDeck($0) }
-            for deck in decks {
-                SlideDeckImporter.importDeck(url: deck, at: insertAt, into: document, app: app)
-            }
-            guard !media.isEmpty else { return }
-            let skipped = CueFactory.importMedia(urls: media, at: insertAt, into: document)
-            if skipped > 0 {
-                app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio, video, an image, or a deck.")
-            }
+            importURLs(urls, insertAt: insertAt)
+        }
+    }
+
+    private func importURLs(_ urls: [URL], insertAt: Int?) {
+        guard !urls.isEmpty else { return }
+        // Presentation decks take the slide-import pipeline.
+        let decks = urls.filter { SlideDeckImporter.isDeck($0) }
+        let media = urls.filter { !SlideDeckImporter.isDeck($0) }
+        for deck in decks {
+            SlideDeckImporter.importDeck(url: deck, at: insertAt, into: document, app: app)
+        }
+        guard !media.isEmpty else { return }
+        let skipped = CueFactory.importMedia(urls: media, at: insertAt, into: document)
+        if skipped > 0 {
+            app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio, video, an image, or a deck.")
+        }
+    }
+
+    /// Full-surface drop target shown only while the show has no cues.
+    private var emptyDropTarget: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "square.and.arrow.down.on.square")
+                .font(.system(size: 34))
+                .foregroundStyle(.tertiary)
+            Text("Drop audio, video, images, or decks here")
+                .foregroundStyle(.secondary)
+            Text("or add cues with the + button")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            guard !app.isShowMode, !urls.isEmpty else { return false }
+            importURLs(urls, insertAt: nil)
+            return true
         }
     }
 

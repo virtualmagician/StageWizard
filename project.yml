@@ -26,6 +26,10 @@ targets:
       - Sources
       - path: Support/AppIcon.icns
         buildPhase: resources
+      - path: Support/DocIcon.icns
+        buildPhase: resources
+      - path: Support/Credits.rtf
+        buildPhase: resources
     postBuildScripts:
       # The repo lives under Dropbox (File Provider), which tags build
       # products with xattrs that codesign rejects as "detritus". Strip them
@@ -44,22 +48,24 @@ targets:
         CFBundleIconFile: AppIcon
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
         NSAppleEventsUsageDescription: StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.
-        CFBundleShortVersionString: "1.1.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "4"
         LSApplicationCategoryType: public.app-category.entertainment
         LSMinimumSystemVersion: "26.1"
-        NSHumanReadableCopyright: "© 2026 Marco Tempest"
+        NSHumanReadableCopyright: "© 2026 MagicLab AG"
         NSSupportsAutomaticTermination: false
         NSSupportsSuddenTermination: false
         CFBundleDocumentTypes:
           - CFBundleTypeName: StageWizard Show
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
+            CFBundleTypeIconFile: DocIcon
             LSItemContentTypes:
               - com.marcotempest.stagewizard.show
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.marcotempest.stagewizard.show
             UTTypeDescription: StageWizard Show
+            UTTypeIconFile: DocIcon.icns
             UTTypeConformsTo:
               - public.json
             UTTypeTagSpecification:

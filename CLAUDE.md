@@ -77,6 +77,10 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - Fade cue with no target is a warned no-op; targeting a group reaches children.
 - Output groups may span displays → one decode mirrors to N layers.
 - Rehearsal mode routes video/camera to floating preview windows only.
+- Launch auto-opens the most recent still-existing show (unless opened via
+  Finder); quit is guarded twice: locked-workspace confirm, then dirty-save.
+  AppDelegate.appModel is re-wired in the scene's onAppear — App re-inits
+  would otherwise nil the weak ref and silently disable both guards.
 - Slide cues hold until stopped; starting a slide crossfades out other slides
   on the SAME output group only. Decks are flattened at IMPORT (never any
   external process at showtime) via `SlideDeckImporter`'s probed chain:

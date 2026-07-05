@@ -10,6 +10,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = NSAppearance(named: .darkAqua)
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Reopen the last show. Deferred one runloop turn so a
+        // Finder-initiated application(_:open:) wins; skipped once anything
+        // is open or edited. Missing files are skipped; a corrupt file
+        // alerts inside open(url:) and leaves the blank untitled show.
+        Task { @MainActor in
+            guard let document = Self.appModel?.document,
+                  document.fileURL == nil, !document.isDirty else { return }
+            var candidates: [URL] = []
+            if let last = UserDefaults.standard.string(forKey: ShowDocumentController.lastShowPathKey) {
+                candidates.append(URL(fileURLWithPath: last))
+            }
+            candidates.append(contentsOf: NSDocumentController.shared.recentDocumentURLs)
+            if let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                document.open(url: url)
+            }
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
         Self.appModel?.document.open(url: url)
@@ -20,8 +39,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let document = Self.appModel?.document else { return .terminateNow }
-        return document.confirmQuit() ? .terminateNow : .terminateCancel
+        guard let app = Self.appModel else { return .terminateNow }
+        // A locked workspace exists to swallow stray keystrokes — that
+        // includes a stray ⌘Q. Cancel is the default button: Return must
+        // never quit mid-show.
+        if app.mode != .edit {
+            let alert = NSAlert()
+            alert.messageText = "StageWizard is in \(app.mode == .show ? "Show" : "Rehearsal") mode."
+            alert.informativeText = "Quitting stops all playback and closes the workspace."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Quit Anyway")
+            if alert.runModal() == .alertFirstButtonReturn {
+                return .terminateCancel
+            }
+        }
+        return app.document.confirmQuit() ? .terminateNow : .terminateCancel
     }
 }
 
@@ -41,6 +73,11 @@ struct StageWizardApp: App {
                 .environment(app.document)
                 .tint(Theme.accent)   // MagicLab brand accent, app-wide
                 .frame(minWidth: 980, minHeight: 600)
+                // Re-affirm with the INSTALLED model: SwiftUI recreates the
+                // App struct freely, and each re-init would otherwise leave
+                // the weak delegate hook pointing at a discarded throwaway —
+                // silently disabling the quit dialog and Finder opens.
+                .onAppear { AppDelegate.appModel = app }
         }
         .commands {
             ShowCommands(document: app.document, app: app)

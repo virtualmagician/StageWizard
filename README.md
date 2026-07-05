@@ -5,6 +5,8 @@ camera playback engine built for running real stages — theaters, magic shows,
 talks, and touring rigs. Apple Silicon, macOS 26.1+, Swift 6 (strict
 concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
 
+![StageWizard](Support/UI_screenshot.png)
+
 ## What it does
 
 - **Audio cues** — per-cue output-device routing (Core Audio, hot-plug aware),
@@ -105,7 +107,7 @@ StageWizardApp/  SwiftUI UI, document controller, engine bridge
 Cue *definitions* (Codable, in the show file) are strictly separated from
 playback *instances* (runtime state). All orchestration is MainActor; every
 AVFoundation callback hops isolation immediately; the only off-main mutations
-are documented-thread-safe volume setters driven by the fade clock. 104 unit
+are documented-thread-safe volume setters driven by the fade clock. 119 unit
 and integration tests cover the model, sequencing semantics, the engines,
 deck conversion, and full-stack playback.
 
