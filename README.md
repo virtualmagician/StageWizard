@@ -26,17 +26,19 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   output group; runs until stopped; fade in/out.
 - **Image cues** — still images (PNG/JPEG/HEIC…) on any output group, with
   geometry and fades; holds until stopped.
-- **Text cues** — rich text on stage (titles, lower thirds): a real
-  rich-text editor with the macOS Fonts panel, pasted formatting survives,
-  transparent or colored background, live edits while the cue plays.
+- **Text cues** — rich text on stage (titles, lower thirds): a 16:9
+  WYSIWYG editor with a formatting toolbar (bold/italic, alignment, size,
+  line height, color) plus the macOS Fonts panel; pasted formatting
+  survives, backgrounds are transparent or colored, and edits render
+  live while the cue plays.
 - **Render layers** — every visual cue picks a layer 1–10 (1 = background,
   10 = front) so video, camera, text, and stills stack predictably.
 - **Live camera effects** — per-cue, toggled live: **person segmentation**
   (the background turns transparent, revealing lower layers behind the
   performer) and **magic dust** — particle emitters that follow the
-  performer's hands (Vision hand tracking), using Particle Designer
-  `.pex` emitters or the built-in sparkle. All on-device (Vision +
-  CoreImage), nothing external at showtime.
+  performer's hands (Vision hand tracking), with six bundled emitter
+  presets, any Particle Designer `.pex` file, and a 0.5–10× particle-size
+  dial. All on-device (Vision + CoreImage), nothing external at showtime.
 - **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
   navigable deck: one group named after the file, one cue per slide, GO to
   advance, crossfade between slides, trailing clear cue. Decks are flattened
@@ -63,7 +65,10 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
 - **Virtual webcam** — activate the bundled **StageWizard Camera** system
   extension and any output group can mirror into it: Zoom, Teams, or OBS
   pick "StageWizard Camera" and receive your show feed at 1080p30, driven
-  by the same cue list as the stage outputs.
+  by the same cue list as the stage outputs. The feed state is saved with
+  the show, and a floating monitor panel shows exactly what the camera
+  transmits. In Show mode the whole transport turns red — one glance says
+  the workspace is live.
 - **Operator UX** — assignable keyboard shortcuts (stored in the show file)
   plus per-cue hotkeys, all suppressed while typing; Active Cues panel with
   live progress and per-instance transport; editable notes next to the GO
