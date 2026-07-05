@@ -92,9 +92,48 @@ private struct GeneralSettingsTab: View {
 /// uses the group follows — no cue editing needed after a rig change.
 private struct OutputGroupsTab: View {
     @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
     @State private var selectedGroupID: UUID?
 
     var body: some View {
+        VStack(spacing: 0) {
+            virtualWebcamBar
+            Divider()
+            groupsSplit
+        }
+    }
+
+    /// Activation + status for the "StageWizard Camera" other apps can use.
+    private var virtualWebcamBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "web.camera")
+            Text("Virtual Webcam")
+                .fontWeight(.semibold)
+            Text(app.virtualCamera.status.label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+            switch app.virtualCamera.status {
+            case .active:
+                if !app.virtualCamera.isFeeding {
+                    Button("Start Feed") { Task { await app.virtualCamera.startFeeding() } }
+                } else {
+                    Button("Stop Feed") { app.virtualCamera.stopFeeding() }
+                }
+                Button("Deactivate") { app.virtualCamera.deactivate() }
+            case .activating:
+                ProgressView().controlSize(.small)
+            default:
+                Button("Activate…") { app.virtualCamera.activate() }
+                    .help("Installs the StageWizard Camera extension (one-time macOS approval). Requires running from /Applications.")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var groupsSplit: some View {
         HSplitView {
             VStack(spacing: 0) {
                 List(selection: $selectedGroupID) {
@@ -192,6 +231,12 @@ private struct GroupDetail: View {
                 set: { v in update { $0.name = v } }
             ))
             .frame(maxWidth: 300)
+
+            Toggle("Send to Virtual Webcam", isOn: Binding(
+                get: { group.virtualCamera },
+                set: { v in update { $0.virtualCamera = v } }
+            ))
+            .help("Mirror this output into the “StageWizard Camera” that Zoom/Teams/OBS can use (activate it above).")
 
             Section("Assigned displays — the same video mirrors onto all of them") {
                 // Connected displays as toggles.

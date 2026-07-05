@@ -18,6 +18,10 @@ targets:
   StageWizard:
     type: application
     platform: macOS
+    dependencies:
+      - target: StageWizardCamera
+        embed: true
+        codeSign: true
     entitlements:
       path: Support/StageWizard.entitlements
       properties:
@@ -26,7 +30,9 @@ targets:
         # without this — dev builds were unhardened so it went unnoticed.
         com.apple.security.device.camera: true
     sources:
-      - Sources
+      - path: Sources
+        excludes:
+          - CameraExtension
       - path: Support/AppIcon.icns
         buildPhase: resources
       - path: Support/DocIcon.icns
@@ -51,8 +57,8 @@ targets:
         CFBundleIconFile: AppIcon
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
         NSAppleEventsUsageDescription: StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.
-        CFBundleShortVersionString: "1.3.0"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "1.4.0"
+        CFBundleVersion: "6"
         LSApplicationCategoryType: public.app-category.entertainment
         LSMinimumSystemVersion: "26.1"
         NSHumanReadableCopyright: "© 2026 MagicLab AG"
@@ -78,6 +84,35 @@ targets:
             UTTypeDescription: StageWizard Cues
             UTTypeConformsTo:
               - public.json
+
+  StageWizardCamera:
+    type: system-extension
+    platform: macOS
+    sources:
+      - Sources/CameraExtension
+    entitlements:
+      path: Support/CameraExtension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.marcotempest.stagewizard.camera
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+    info:
+      path: Support/CameraExtensionInfo.plist
+      properties:
+        CFBundleName: StageWizard Camera
+        CFBundleDisplayName: StageWizard Camera
+        CFBundleShortVersionString: "1.4.0"
+        CFBundleVersion: "6"
+        NSHumanReadableCopyright: "© 2026 MagicLab AG"
+        CMIOExtension:
+          CMIOExtensionMachServiceName: Z3U3NKMU2Y.com.marcotempest.stagewizard.camera
+    postBuildScripts:
+      - script: 'xattr -cr "${CODESIGNING_FOLDER_PATH}" 2>/dev/null || true'
+        name: Strip cloud-sync xattrs before codesign
+        basedOnDependencyAnalysis: false
 
   StageWizardTests:
     type: bundle.unit-test

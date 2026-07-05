@@ -137,6 +137,12 @@ final class AppModel {
         provider.rehearsalActive = { [weak self] in
             self?.mode == .rehearsal
         }
+        provider.virtualCameraFeeding = { [weak self] in
+            self?.virtualCamera.isFeeding ?? false
+        }
+        virtualCamera.onWarning = { [weak self] message in
+            self?.pushWarning(message)
+        }
         // Preview resizes invalidate stage-relative transforms — re-push.
         OutputWindowManager.shared.onPreviewResized = { [weak self] in
             self?.reapplyAllGeometry()
@@ -234,6 +240,9 @@ final class AppModel {
             (instance.player as? TextCuePlayer)?.applyRenderLayer(renderLayer)
         }
     }
+
+    /// The virtual webcam ("StageWizard Camera") — activation + frame feed.
+    let virtualCamera = VirtualCameraManager()
 
     /// Push a camera cue's effects to any running instances — segmentation
     /// and magic dust toggle live, no session restart.

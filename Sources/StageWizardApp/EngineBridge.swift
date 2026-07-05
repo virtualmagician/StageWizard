@@ -12,6 +12,9 @@ final class EnginePlayerProvider: CuePlayerProviding {
     /// True while the workspace is in Rehearsal mode — video/camera cues then
     /// render into floating preview windows instead of the real displays.
     var rehearsalActive: @MainActor () -> Bool = { false }
+    /// True while the virtual webcam is feeding — groups flagged
+    /// `virtualCamera` then mirror onto its monitor panel too.
+    var virtualCameraFeeding: @MainActor () -> Bool = { false }
 
     func armPlayer(for cue: Cue, showFolder: URL?) async throws -> MediaPlayback {
         switch cue.body {
@@ -98,9 +101,17 @@ final class EnginePlayerProvider: CuePlayerProviding {
         legacy: DisplayFingerprint?,
         cueNumber: String
     ) throws -> [OutputTarget] {
+        // Groups flagged for the virtual webcam mirror onto its monitor
+        // panel in EVERY mode (the panel is a preview window; SCK streams
+        // it into the camera extension).
+        var extra: [OutputTarget] = []
+        if virtualCameraFeeding(),
+           let groupID, let group = settings().group(withID: groupID), group.virtualCamera {
+            extra.append(VirtualCameraManager.monitorTarget)
+        }
         if rehearsalActive() {
             if let groupID, let group = settings().group(withID: groupID) {
-                return [.preview(id: group.id, title: group.name)]
+                return [.preview(id: group.id, title: group.name)] + extra
             }
             if let legacy {
                 // Pre-migration direct assignment: one shared legacy preview.
@@ -108,8 +119,16 @@ final class EnginePlayerProvider: CuePlayerProviding {
             }
             throw ArmError.noOutputAssigned(cueName: cueNumber)
         }
-        return try resolveDisplayIDs(groupID: groupID, legacy: legacy, cueNumber: cueNumber)
-            .map { .display($0) }
+        do {
+            let displays = try resolveDisplayIDs(groupID: groupID, legacy: legacy, cueNumber: cueNumber)
+                .map { OutputTarget.display($0) }
+            return displays + extra
+        } catch {
+            // A webcam-only group (no displays assigned/connected) is valid
+            // as long as the virtual camera is live.
+            if !extra.isEmpty { return extra }
+            throw error
+        }
     }
 
     private func resolveDisplayIDs(

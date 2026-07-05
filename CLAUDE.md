@@ -109,6 +109,21 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   (zero-dependency floor). Rendered PNGs live in
   ~/Library/Application Support/StageWizard/SlideCache/.
 
+## Virtual webcam ("StageWizard Camera")
+
+- CMIO camera system extension (Sources/CameraExtension, target
+  StageWizardCamera) embedded at Contents/Library/SystemExtensions; source
+  stream = what Zoom sees, sink stream = fed by the app (CMSimpleQueue).
+- Feed path: cues render into the pinned "Virtual Webcam" preview panel
+  (OutputTarget.preview id 2222…), ScreenCaptureKit streams that window at
+  1080p30 into the sink (VirtualCameraManager). Needs Screen Recording TCC.
+- The restricted `com.apple.developer.system-extension.install` entitlement
+  lives ONLY in Support/StageWizardSigning.entitlements (used by the re-sign
+  scripts) — putting it in project.yml makes Xcode demand a provisioning
+  profile. Scripts sign INSIDE-OUT: extension (its own entitlements) → app.
+- Activation needs the app in /Applications + one-time user approval; the
+  extension's mach service name is hardcoded team-prefixed in project.yml.
+
 ## Release / credentials (machine-local, no secrets in repo)
 
 - Developer ID cert (team Z3U3NKMU2Y) + notary keychain profile

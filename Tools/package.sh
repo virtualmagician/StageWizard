@@ -40,8 +40,14 @@ if [[ -n "$DEVID" ]]; then
   xattr -cr "$APP"
   # --entitlements is load-bearing: re-signing without it STRIPS the
   # apple-events + camera entitlements (hardened runtime then blocks both).
+  # Inside-out: embedded camera extension first, then the app.
+  EXT="$APP/Contents/Library/SystemExtensions/StageWizardCamera.systemextension"
+  if [[ -d "$EXT" ]]; then
+    codesign --force --options runtime --timestamp \
+      --entitlements Support/CameraExtension.entitlements --sign "$DEVID" "$EXT"
+  fi
   codesign --force --options runtime --timestamp \
-    --entitlements Support/StageWizard.entitlements --sign "$DEVID" "$APP"
+    --entitlements Support/StageWizardSigning.entitlements --sign "$DEVID" "$APP"
   codesign --verify --strict --deep "$APP"
 
   if xcrun notarytool history --keychain-profile stagewizard-notary >/dev/null 2>&1; then

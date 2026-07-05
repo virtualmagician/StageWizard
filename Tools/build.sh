@@ -40,8 +40,16 @@ cp -R "$DERIVED/Build/Products/Release/StageWizard.app" build/StageWizard.app
 DEVID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
 if [[ -n "$DEVID" ]]; then
   xattr -cr build/StageWizard.app
-  codesign --force --deep --options runtime --timestamp \
-    --entitlements Support/StageWizard.entitlements \
+  # Inside-out: the embedded camera extension first (with ITS entitlements),
+  # then the app — the app seal covers the extension.
+  EXT="build/StageWizard.app/Contents/Library/SystemExtensions/StageWizardCamera.systemextension"
+  if [[ -d "$EXT" ]]; then
+    codesign --force --options runtime --timestamp \
+      --entitlements Support/CameraExtension.entitlements \
+      --sign "$DEVID" "$EXT"
+  fi
+  codesign --force --options runtime --timestamp \
+    --entitlements Support/StageWizardSigning.entitlements \
     --sign "$DEVID" build/StageWizard.app
   echo "Signed with: $DEVID"
 fi

@@ -56,10 +56,14 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
 - **Panic** — Esc fades everything out over the show's panic duration; Esc
   twice hard-stops instantly. Hardwired, not reassignable.
 - **Workspace modes** — Edit / **Show** (locks every editing surface while
-  transport stays live) / **Rehearsal** (locked like Show, but video and
+  transport stays live) / **Rehearsal** (stays fully editable, and video and
   camera output goes to floating, resizable preview windows — one per output
-  group — so you can run the full show with no rig attached). The mode is
+  group — so you can adjust the show with no rig attached). The mode is
   saved with the show file.
+- **Virtual webcam** — activate the bundled **StageWizard Camera** system
+  extension and any output group can mirror into it: Zoom, Teams, or OBS
+  pick "StageWizard Camera" and receive your show feed at 1080p30, driven
+  by the same cue list as the stage outputs.
 - **Operator UX** — assignable keyboard shortcuts (stored in the show file)
   plus per-cue hotkeys, all suppressed while typing; Active Cues panel with
   live progress and per-instance transport; editable notes next to the GO

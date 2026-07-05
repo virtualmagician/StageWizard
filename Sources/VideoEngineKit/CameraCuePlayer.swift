@@ -42,7 +42,9 @@ public final class CameraDeviceManager {
             mediaType: .video,
             position: .unspecified
         )
-        cameras = discovery.devices.map { Camera(uid: $0.uniqueID, name: $0.localizedName) }
+        cameras = discovery.devices
+            .filter { $0.localizedName != "StageWizard Camera" }   // no feedback loops
+            .map { Camera(uid: $0.uniqueID, name: $0.localizedName) }
     }
 
     /// Resolve a persisted UID; nil UID = first available camera.
