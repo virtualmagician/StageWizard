@@ -22,11 +22,19 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   the same thing on every display of a group.
 - **Camera cues** — live camera input (built-in, USB/UVC, Continuity) on any
   output group; runs until stopped; fade in/out.
+- **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
+  navigable deck: one group named after the file, one cue per slide, GO to
+  advance, crossfade between slides, trailing clear cue. Decks are flattened
+  to per-slide images at import by the best converter installed (ONLYOFFICE's
+  OOXML-native engine, PowerPoint, Keynote, or LibreOffice — plain PDFs need
+  nothing at all), so **nothing external ever runs during a show**.
 - **Sequencing** — pre-wait, auto-continue (anchored to cue start + post-wait),
   auto-follow (fires on completion), and a playhead that skips past auto
   chains the way operators expect.
-- **Groups** — fire-all-at-once or **timeline mode** with a drag-to-arrange
-  editor: each child cue is a bar on a ruler (audio bars show waveforms).
+- **Groups** — fire-all-at-once, **timeline mode** with a drag-to-arrange
+  editor (each child is a bar on a ruler; audio bars show waveforms), or
+  **enter-and-play-first**: GO steps the playhead through the group's
+  children one by one — how slide decks navigate.
 - **Fade & stop cues** — target any running cue (or everything); resolved
   against live playback at fire time; fade to level or to silence with
   stop-when-done.
@@ -40,10 +48,11 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
 - **Operator UX** — assignable keyboard shortcuts (stored in the show file)
   plus per-cue hotkeys, all suppressed while typing; Active Cues panel with
   live progress and per-instance transport; editable notes next to the GO
-  button; drag media files straight into the cue list; copy/paste/duplicate
-  cues with reference-safe identity remapping; full-row color tags;
-  collapsible groups; waveform/filmstrip trim editors; broken-media relink;
-  rotating backups and playback-aware autosave.
+  button; drag media files (or whole decks) straight into the cue list;
+  copy/paste/duplicate cues with reference-safe identity remapping; one-click
+  renumber (10/20/30…); Open Recent; full-row color tags; collapsible groups;
+  waveform/filmstrip trim editors; broken-media relink; rotating backups and
+  playback-aware autosave. Dark show-control look with MagicLab styling.
 - **Show files** — versioned, diff-friendly JSON (`.stagewizard`); media
   referenced relative to the show file so shows survive folder moves; old
   format versions migrate automatically on open.
@@ -55,11 +64,15 @@ Requires Xcode 26+. The Xcode project is generated, and builds land in
 
 ```sh
 Tools/build.sh        # generate project, run all tests, build Release
-Tools/package.sh      # everything above + dependency check + release zip
+Tools/package.sh      # everything above + dependency check + sign,
+                      # notarize & staple (when credentials are present) + zip
 ```
 
-The packaged app is self-contained (system frameworks only) and ad-hoc
-signed — on another Mac, right-click → Open the first time.
+The packaged app is self-contained (system frameworks only). Release zips on
+the [releases page](https://github.com/virtualmagician/StageWizard/releases)
+are Developer ID signed and notarized — download, unzip, double-click.
+Without signing credentials, `package.sh` falls back to an ad-hoc build
+(right-click → Open the first time).
 
 Test media and a demo show:
 
@@ -78,7 +91,8 @@ AudioEngineKit/  one AVAudioEngine per output device, pooled player nodes,
                  sample-accurate segment scheduling, HAL hot-plug
 VideoEngineKit/  AVQueuePlayer arm pipeline (load→layer→ready→seek→preroll),
                  output windows keyed by target (display or preview),
-                 camera capture, display fingerprint matching, geometry
+                 camera capture, still/slide rendering, display fingerprint
+                 matching, geometry
 FadeKit/         one 100 Hz fade clock (≤1 dB steps, lands on exactly 0.0
                  before any stop); video opacity via render-server animations
 ShortcutKit/     local event-monitor dispatcher + shortcut recorder
@@ -88,9 +102,9 @@ StageWizardApp/  SwiftUI UI, document controller, engine bridge
 Cue *definitions* (Codable, in the show file) are strictly separated from
 playback *instances* (runtime state). All orchestration is MainActor; every
 AVFoundation callback hops isolation immediately; the only off-main mutations
-are documented-thread-safe volume setters driven by the fade clock. 93 unit
-and integration tests cover the model, sequencing semantics, both engines,
-and full-stack playback.
+are documented-thread-safe volume setters driven by the fade clock. 104 unit
+and integration tests cover the model, sequencing semantics, the engines,
+deck conversion, and full-stack playback.
 
 ## Prior art & thanks
 
