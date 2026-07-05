@@ -150,6 +150,9 @@ final class VirtualCameraManager: NSObject {
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
         configuration.showsCursor = false
+        // Window captures paste at native size into the top-left unless told
+        // to scale — the camera frame must be full 1080p.
+        configuration.scalesToFit = true
         configuration.queueDepth = 5
 
         let stream = SCStream(
