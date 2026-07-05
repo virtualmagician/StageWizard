@@ -41,7 +41,7 @@ if [[ -n "$DEVID" ]]; then
   # --entitlements is load-bearing: re-signing without it STRIPS the
   # apple-events + camera entitlements (hardened runtime then blocks both).
   # Inside-out: embedded camera extension first, then the app.
-  EXT="$APP/Contents/Library/SystemExtensions/StageWizardCamera.systemextension"
+  EXT="$APP/Contents/Library/SystemExtensions/com.marcotempest.stagewizard.camera.systemextension"
   if [[ -d "$EXT" ]]; then
     codesign --force --options runtime --timestamp \
       --entitlements Support/CameraExtension.entitlements --sign "$DEVID" "$EXT"

@@ -97,6 +97,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marcotempest.stagewizard.camera
+        # The extension finder matches bundles NAMED by their identifier
+        # (see OBS/Insta360) — a friendlier name means "not found".
+        PRODUCT_NAME: com.marcotempest.stagewizard.camera
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
     info:

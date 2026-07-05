@@ -42,7 +42,7 @@ if [[ -n "$DEVID" ]]; then
   xattr -cr build/StageWizard.app
   # Inside-out: the embedded camera extension first (with ITS entitlements),
   # then the app — the app seal covers the extension.
-  EXT="build/StageWizard.app/Contents/Library/SystemExtensions/StageWizardCamera.systemextension"
+  EXT="build/StageWizard.app/Contents/Library/SystemExtensions/com.marcotempest.stagewizard.camera.systemextension"
   if [[ -d "$EXT" ]]; then
     codesign --force --options runtime --timestamp \
       --entitlements Support/CameraExtension.entitlements \
