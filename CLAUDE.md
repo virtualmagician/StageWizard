@@ -123,7 +123,9 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   provisioning profile with the System Extension capability, from the Apple
   developer portal) is present to embed; otherwise launchd REFUSES TO SPAWN
   the app (error 163). The scripts handle this automatically and fall back
-  to the unrestricted entitlements. Scripts sign INSIDE-OUT: extension (its
+  to the unrestricted entitlements. The profile IS committed (public repo:
+  profiles hold no secrets — certs + entitlements only; useless without the
+  private key) and is valid until 2044-06-30. Scripts sign INSIDE-OUT: extension (its
   own entitlements) → app.
 - Activation needs the app in /Applications + one-time user approval; the
   extension's mach service name is hardcoded team-prefixed in project.yml.
