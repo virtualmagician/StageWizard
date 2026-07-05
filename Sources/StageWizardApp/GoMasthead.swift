@@ -169,6 +169,12 @@ struct WarningBanner: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text(warning.message)
                         .lineLimit(2)
+                    if let actionTitle = warning.actionTitle, let action = warning.action {
+                        Button(actionTitle) { action() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .tint(.black)
+                    }
                     Spacer()
                     Button {
                         app.dismissWarning(warning.id)

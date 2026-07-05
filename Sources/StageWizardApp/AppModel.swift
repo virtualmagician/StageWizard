@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Observation
 
 /// Composition root: owns the document, transport, and shortcut manager and
@@ -14,6 +15,8 @@ final class AppModel {
         let id = UUID()
         let message: String
         let date = Date()
+        var actionTitle: String?
+        var action: (@MainActor () -> Void)?
     }
 
     /// Recent operator-facing warnings (broken media, missing devices…).
@@ -50,6 +53,10 @@ final class AppModel {
         if newMode == .rehearsal {
             openRehearsalPreviews()
         }
+        if newMode != .edit {
+            // Pre-show check: surface permission problems BEFORE the first GO.
+            checkPermissionsForCurrentShow()
+        }
         if persist, document.show.settings.workspaceMode != newMode {
             document.mutate { $0.settings.workspaceMode = newMode }
         }
@@ -80,6 +87,7 @@ final class AppModel {
         self.shortcuts = ShortcutManager()
         wire()
         wireEngines(provider: provider)
+        checkPermissionsForCurrentShow()
     }
 
     private func wire() {
@@ -97,6 +105,7 @@ final class AppModel {
         document.onDocumentReplaced = { [weak self] in
             guard let self else { return }
             self.transport.reset()
+            self.checkPermissionsForCurrentShow()
             // Restore the saved workspace mode without re-dirtying the
             // freshly opened document.
             self.setMode(self.document.show.settings.workspaceMode, persist: false)
@@ -156,6 +165,43 @@ final class AppModel {
                     // closed; the show continues on the remaining screens.
                     self.pushWarning("Cue \(instance.cue.number): one of its displays disconnected — continuing on the rest.")
                 }
+            }
+        }
+    }
+
+    // MARK: - Permissions
+
+    /// Verify every permission the current show needs — on launch, on show
+    /// open, and when entering Show/Rehearsal mode. Camera consent is
+    /// requested proactively so the prompt never lands on a live GO.
+    func checkPermissionsForCurrentShow() {
+        let usesCamera = document.show.cues.contains { cue in
+            if case .camera = cue.body { return true }
+            return false
+        }
+        guard usesCamera else { return }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            Task { [weak self] in
+                let granted = await AVCaptureDevice.requestAccess(for: .video)
+                if !granted {
+                    self?.pushCameraDeniedWarning()
+                }
+            }
+        default:
+            pushCameraDeniedWarning()
+        }
+    }
+
+    private func pushCameraDeniedWarning() {
+        pushWarning(
+            "This show uses camera cues, but camera access is denied — those cues will fail.",
+            actionTitle: "Open Camera Settings"
+        ) {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                NSWorkspace.shared.open(url)
             }
         }
     }
@@ -235,8 +281,8 @@ final class AppModel {
         }
     }
 
-    func pushWarning(_ message: String) {
-        let warning = OperatorWarning(message: message)
+    func pushWarning(_ message: String, actionTitle: String? = nil, action: (@MainActor () -> Void)? = nil) {
+        let warning = OperatorWarning(message: message, actionTitle: actionTitle, action: action)
         warnings.append(warning)
         // Self-dismiss so mid-show banners never need mouse attention.
         Task { [weak self] in

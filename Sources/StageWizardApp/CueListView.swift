@@ -102,9 +102,22 @@ struct CueListView: View {
             } else if isGroup {
                 Theme.groupRowBackground
             }
+            // A group with live children glows — vital when it's collapsed
+            // and the running cues are hidden inside.
+            if isGroup && groupHasActiveCues(cue) {
+                Theme.standby.opacity(0.16)
+            }
             if isSelected {
                 Theme.selectionOverlay
             }
+        }
+    }
+
+    /// True while the group instance itself or any child instance is live.
+    private func groupHasActiveCues(_ group: Cue) -> Bool {
+        app.transport.registry.instances.contains { instance in
+            !instance.state.isTerminal
+                && (instance.cue.id == group.id || instance.cue.parentID == group.id)
         }
     }
 
@@ -270,8 +283,21 @@ struct CueRowView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.red)
                 .help("No video output assigned — pick one in the Output tab")
+        } else if isActiveGroupRow(cue) {
+            Image(systemName: "waveform")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.standby)
+                .help("Cues inside this group are playing")
         } else {
             Text("")
+        }
+    }
+
+    private func isActiveGroupRow(_ cue: Cue) -> Bool {
+        guard case .group = cue.body else { return false }
+        return app.transport.registry.instances.contains { instance in
+            !instance.state.isTerminal
+                && (instance.cue.id == cue.id || instance.cue.parentID == cue.id)
         }
     }
 
