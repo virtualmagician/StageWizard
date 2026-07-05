@@ -6,14 +6,12 @@ struct ContentView: View {
     @State private var showingShortcuts = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            GoMasthead()
-            Divider()
-            // In flow, right under the transport strip: warnings surface at
-            // the top of the window where the operator is already looking,
-            // and never cover the cue list or the GO button.
-            WarningBanner()
-            HSplitView {
+        HSplitView {
+            // LEFT: standing-by header, warnings, cue list + inspector, modes.
+            VStack(spacing: 0) {
+                StandingByHeader()
+                Divider()
+                WarningBanner()
                 VSplitView {
                     CueListView()
                         .frame(minHeight: 240)
@@ -24,13 +22,14 @@ struct ContentView: View {
                             .frame(minHeight: 180, idealHeight: 230)
                     }
                 }
-                .layoutPriority(1)
-
-                ActiveCuesPanel()
-                    .frame(minWidth: 230, idealWidth: 270, maxWidth: 400)
+                Divider()
+                ModeBar()
             }
-            Divider()
-            ModeBar()
+            .layoutPriority(1)
+
+            // RIGHT: GO / transport / In Progress / STOP ALL.
+            TransportSidebar()
+                .frame(minWidth: 230, idealWidth: 270, maxWidth: 400)
         }
         .navigationTitle(document.windowTitle)
         .toolbar { toolbarContent }

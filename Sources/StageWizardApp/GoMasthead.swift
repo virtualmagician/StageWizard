@@ -1,49 +1,20 @@
 import SwiftUI
 
-/// Transport strip: large GO at left, standing-by cue line with the
-/// editable notes box under it, and the transport cluster at the right.
-struct GoMasthead: View {
+/// Top of the LEFT column: the standing-by cue line with the editable
+/// notes box under it. (GO and the transport moved to TransportSidebar.)
+struct StandingByHeader: View {
     @Environment(AppModel.self) private var app
     @Environment(ShowDocumentController.self) private var document
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            goButton
-
-            VStack(alignment: .leading, spacing: 6) {
-                standingByLine
-                notesBox
-            }
-            .frame(maxWidth: .infinity)
-
-            VStack(alignment: .trailing, spacing: 8) {
-                transportCluster
-                panicButton
-            }
+        VStack(alignment: .leading, spacing: 6) {
+            standingByLine
+            notesBox
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Theme.panelBackground)
     }
-
-    // MARK: GO
-
-    private var goButton: some View {
-        Button {
-            app.transport.go()
-        } label: {
-            Text("GO")
-                .font(.system(size: 34, weight: .heavy))
-                .frame(width: 96, height: 88)
-        }
-        .buttonStyle(.borderedProminent)
-        // Red GO = the workspace is LIVE (Show mode).
-        .tint(app.isShowMode ? Theme.panic : Theme.go)
-        .disabled(app.transport.standingByCue == nil || app.transport.isPanicking)
-        .help("Fire the standing-by cue (Space)")
-    }
-
-    // MARK: Standing-by + notes
 
     private var standingByLine: some View {
         HStack(spacing: 8) {
@@ -108,8 +79,50 @@ struct GoMasthead: View {
         .frame(height: 46)
         .background(Theme.insetBackground, in: RoundedRectangle(cornerRadius: 6))
     }
+}
 
-    // MARK: Transport
+/// The RIGHT column: big GO on top, transport cluster, the In Progress
+/// panel, and STOP ALL pinned to the bottom.
+struct TransportSidebar: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                goButton
+                transportCluster
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Theme.panelBackground)
+
+            Divider()
+
+            ActiveCuesPanel()
+                .frame(maxHeight: .infinity)
+
+            Divider()
+
+            panicButton
+                .padding(12)
+        }
+    }
+
+    private var goButton: some View {
+        Button {
+            app.transport.go()
+        } label: {
+            Text("GO")
+                .font(.system(size: 34, weight: .heavy))
+                .frame(maxWidth: .infinity)
+                .frame(height: 88)
+        }
+        .buttonStyle(.borderedProminent)
+        // Red GO = the workspace is LIVE (Show mode).
+        .tint(app.isShowMode ? Theme.panic : Theme.go)
+        .disabled(app.transport.standingByCue == nil || app.transport.isPanicking)
+        .help("Fire the standing-by cue (Space)")
+    }
 
     private var transportCluster: some View {
         HStack(spacing: 8) {
@@ -149,6 +162,7 @@ struct GoMasthead: View {
         .buttonStyle(.bordered)
         .controlSize(.large)
         .tint(app.isShowMode ? Theme.panic : Theme.accent)
+        .frame(maxWidth: .infinity)
     }
 
     private var panicButton: some View {
@@ -157,7 +171,8 @@ struct GoMasthead: View {
         } label: {
             Text(app.transport.isPanicking ? "STOPPING!" : "STOP ALL")
                 .font(.system(size: 14, weight: .heavy))
-                .frame(width: 150, height: 30)
+                .frame(maxWidth: .infinity)
+                .frame(height: 30)
         }
         .buttonStyle(.borderedProminent)
         .tint(app.transport.isPanicking ? .red : (app.isShowMode ? Theme.panic : Theme.go))
