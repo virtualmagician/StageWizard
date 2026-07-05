@@ -204,6 +204,12 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
     private var deviceID: CMIODeviceID = 0
     private var sinkStreamID: CMIOStreamID = 0
     private var sinkQueue: CMSimpleQueue?
+    // SCK only delivers frames when the window CHANGES — a held frame or
+    // still image goes silent and the extension would fall back to its
+    // splash. Re-send the last frame at 30 fps so the camera never starves.
+    private var lastBuffer: CMSampleBuffer?
+    private var lastEnqueueUptime: UInt64 = 0
+    private var repeatTimer: DispatchSourceTimer?
 
     /// The extension's fixed device UUID (VirtualCameraIDs.device).
     private static let deviceUID = "7A9EB600-1000-4000-8000-5747697A6172"
@@ -267,12 +273,47 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
             self.deviceID = device
             self.sinkStreamID = sink
             self.sinkQueue = simpleQueue
+            self.startRepeatTimer()
         }
         return true
     }
 
+    /// queue-confined. Re-enqueues the last frame (fresh timestamps) when
+    /// SCK has been quiet for >100 ms.
+    private func startRepeatTimer() {
+        repeatTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now(), repeating: 1.0 / 30.0)
+        timer.setEventHandler { [weak self] in
+            guard let self, let sinkQueue = self.sinkQueue, let last = self.lastBuffer else { return }
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now - self.lastEnqueueUptime > 100_000_000 else { return }
+            guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else { return }
+            var timing = CMSampleTimingInfo(
+                duration: CMTime(value: 1, timescale: 30),
+                presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+                decodeTimeStamp: .invalid
+            )
+            var copy: CMSampleBuffer?
+            CMSampleBufferCreateCopyWithNewTiming(
+                allocator: kCFAllocatorDefault, sampleBuffer: last,
+                sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                sampleBufferOut: &copy
+            )
+            if let copy {
+                self.lastEnqueueUptime = now
+                CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(copy).toOpaque())
+            }
+        }
+        timer.resume()
+        repeatTimer = timer
+    }
+
     func disconnect() {
         queue.sync {
+            repeatTimer?.cancel()
+            repeatTimer = nil
+            lastBuffer = nil
             if deviceID != 0, sinkStreamID != 0 {
                 CMIODeviceStopStream(deviceID, sinkStreamID)
             }
@@ -290,6 +331,8 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let statusRaw = attachments.first?[.status] as? Int,
               statusRaw == SCFrameStatus.complete.rawValue else { return }
+        lastBuffer = sampleBuffer
+        lastEnqueueUptime = DispatchTime.now().uptimeNanoseconds
         guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else { return }
         CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(sampleBuffer).toOpaque())
     }
