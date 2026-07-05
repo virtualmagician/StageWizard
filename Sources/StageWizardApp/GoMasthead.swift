@@ -68,7 +68,13 @@ struct GoMasthead: View {
         .background(Theme.insetBackground, in: RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(app.transport.standingByCue != nil ? Theme.standbyBorder : .clear, lineWidth: 1.5)
+                // Red hairline = the workspace is LIVE, matching GO.
+                .strokeBorder(
+                    app.transport.standingByCue != nil
+                        ? (app.isShowMode ? Theme.panic.opacity(0.8) : Theme.standbyBorder)
+                        : .clear,
+                    lineWidth: 1.5
+                )
         )
     }
 
