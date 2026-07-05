@@ -148,6 +148,7 @@ struct GoMasthead: View {
         .labelStyle(.iconOnly)
         .buttonStyle(.bordered)
         .controlSize(.large)
+        .tint(app.isShowMode ? Theme.panic : Theme.accent)
     }
 
     private var panicButton: some View {
@@ -159,7 +160,7 @@ struct GoMasthead: View {
                 .frame(width: 150, height: 30)
         }
         .buttonStyle(.borderedProminent)
-        .tint(app.transport.isPanicking ? .red : Theme.go)
+        .tint(app.transport.isPanicking ? .red : (app.isShowMode ? Theme.panic : Theme.go))
         .help("Fade everything out (Esc). Press twice for an immediate hard stop.")
     }
 }
