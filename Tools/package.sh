@@ -19,7 +19,7 @@ Tools/build.sh
 
 APP="build/StageWizard.app"
 BINARY="$APP/Contents/MacOS/StageWizard"
-VERSION=$(grep 'CFBundleShortVersionString' project.yml | sed 's/.*"\(.*\)"/\1/')
+VERSION=$(grep 'CFBundleShortVersionString' project.yml | head -1 | sed 's/.*"\(.*\)"/\1/')
 
 echo ""
 echo "Checking for external dependencies…"
