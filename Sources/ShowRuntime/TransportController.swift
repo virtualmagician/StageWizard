@@ -50,39 +50,66 @@ public final class TransportController {
 
     private var settings: ShowSettings { show().settings }
 
-    // MARK: - Playhead
+    // MARK: - Playhead / GO sequence
+
+    /// The GO-able positions of the show, top to bottom. Enter-and-play-first
+    /// groups contribute their CHILDREN (the header is an entry point, not a
+    /// stop): GO walks through a slide deck cue by cue, then exits.
+    public var goSequence: [Cue] {
+        let currentShow = show()
+        var sequence: [Cue] = []
+        for cue in currentShow.topLevelCues {
+            if case .group(let body) = cue.body, body.mode == .enterAndPlayFirst {
+                sequence.append(contentsOf: currentShow.children(of: cue.id))
+            } else {
+                sequence.append(cue)
+            }
+        }
+        return sequence
+    }
 
     public var standingByCue: Cue? {
         guard !playheadPastEnd else { return nil }
-        let top = show().topLevelCues
-        if let playheadID { return top.first { $0.id == playheadID } }
-        return top.first
+        let sequence = goSequence
+        if let playheadID { return sequence.first { $0.id == playheadID } }
+        return sequence.first
     }
 
     public func setPlayhead(_ cueID: UUID?) {
-        // The playhead only stands on top-level cues.
-        if let cueID, let cue = show().cue(withID: cueID), cue.parentID == nil {
+        guard let cueID else {
+            playheadID = nil
+            return
+        }
+        guard let cue = show().cue(withID: cueID) else { return }
+        // Selecting an enter-group header stands its first child by.
+        if case .group(let body) = cue.body, body.mode == .enterAndPlayFirst {
+            if let first = show().children(of: cue.id).first {
+                playheadID = first.id
+                playheadPastEnd = false
+            }
+            return
+        }
+        // Otherwise the playhead stands on any GO-able position.
+        if goSequence.contains(where: { $0.id == cueID }) {
             playheadID = cueID
             playheadPastEnd = false
-        } else if cueID == nil {
-            playheadID = nil
         }
     }
 
     public func movePlayhead(by delta: Int) {
-        let top = show().topLevelCues
-        guard !top.isEmpty else { return }
+        let sequence = goSequence
+        guard !sequence.isEmpty else { return }
         if playheadPastEnd {
             // Stepping back from past-the-end re-arms the last cue.
             if delta < 0 {
                 playheadPastEnd = false
-                playheadID = top.last?.id
+                playheadID = sequence.last?.id
             }
             return
         }
-        let current = standingByCue.flatMap { cue in top.firstIndex { $0.id == cue.id } } ?? 0
-        let next = min(max(current + delta, 0), top.count - 1)
-        playheadID = top[next].id
+        let current = standingByCue.flatMap { cue in sequence.firstIndex { $0.id == cue.id } } ?? 0
+        let next = min(max(current + delta, 0), sequence.count - 1)
+        playheadID = sequence[next].id
     }
 
     /// Called when a different show is opened/created: silence everything and
@@ -107,7 +134,8 @@ public final class TransportController {
            last.duration(to: now).seconds < settings.doubleGOProtection {
             return
         }
-        guard let cue = standingByCue else { return }
+        guard let standing = standingByCue else { return }
+        guard let cue = resolveGOTarget(standing) else { return }
         lastGoAt = now
         fire(cue)
         advancePlayheadPastChain(from: cue)
@@ -115,8 +143,22 @@ public final class TransportController {
 
     /// Fire a specific cue directly (per-cue hotkeys, double-click).
     public func fire(cueID: UUID) {
-        guard !isPanicking, let cue = show().cue(withID: cueID) else { return }
+        guard !isPanicking, let raw = show().cue(withID: cueID),
+              let cue = resolveGOTarget(raw) else { return }
         fire(cue)
+    }
+
+    /// Enter-and-play-first group headers resolve to their first child.
+    private func resolveGOTarget(_ cue: Cue) -> Cue? {
+        if case .group(let body) = cue.body, body.mode == .enterAndPlayFirst {
+            let children = show().children(of: cue.id)
+            if children.isEmpty {
+                onOperatorWarning?("Group \(cue.number) is empty — nothing to play.")
+                return nil
+            }
+            return children[0]
+        }
+        return cue
     }
 
     private func fire(_ cue: Cue) {
@@ -196,8 +238,13 @@ public final class TransportController {
     private func actionCompleted(for instance: CueInstance) {
         // Auto-follow: next cue fires when this cue's action completes.
         guard case .autoFollow = instance.cue.follow else { return }
-        // Group children don't chain — their timing comes from timeline offsets.
-        guard instance.cue.parentID == nil else { return }
+        // fireAll/timeline children don't chain (offsets sequence them), but
+        // enter-and-play-first children DO — they're GO-sequence members.
+        if let parentID = instance.cue.parentID {
+            guard let parent = show().cue(withID: parentID),
+                  case .group(let body) = parent.body,
+                  body.mode == .enterAndPlayFirst else { return }
+        }
         if let next = nextCue(after: instance.cue) {
             fire(next)
         }
@@ -209,7 +256,8 @@ public final class TransportController {
         notifyActivity()
     }
 
-    /// Next cue in the same scope (same parent), document order.
+    /// Next cue in the same scope: siblings for group children, the GO
+    /// sequence at top level. Enter-group children chain within their deck.
     private func nextCue(after cue: Cue) -> Cue? {
         let siblings = cue.parentID.map { show().children(of: $0) } ?? show().topLevelCues
         guard let index = siblings.firstIndex(where: { $0.id == cue.id }) else { return nil }
@@ -217,15 +265,16 @@ public final class TransportController {
     }
 
     /// After GO, the playhead skips the auto-fired chain and stands on the
-    /// next cue that needs a manual GO (standard cue-list convention).
+    /// next GO-able position (standard cue-list convention). The sequence
+    /// walks INTO enter-and-play-first groups and out their far side.
     private func advancePlayheadPastChain(from cue: Cue) {
-        let top = show().topLevelCues
-        guard var index = top.firstIndex(where: { $0.id == cue.id }) else { return }
-        while index < top.count, top[index].follow != FollowAction.none {
+        let sequence = goSequence
+        guard var index = sequence.firstIndex(where: { $0.id == cue.id }) else { return }
+        while index < sequence.count, sequence[index].follow != FollowAction.none {
             index += 1
         }
-        if index + 1 < top.count {
-            playheadID = top[index + 1].id
+        if index + 1 < sequence.count {
+            playheadID = sequence[index + 1].id
         } else {
             playheadID = nil
             playheadPastEnd = true   // end of show: GO goes dead, no wraparound

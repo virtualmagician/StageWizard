@@ -158,6 +158,96 @@ final class V5Tests: XCTestCase {
         XCTAssertTrue(images[0].lastPathComponent.hasPrefix("slide-"))
     }
 
+    // MARK: - Enter-and-play-first groups
+
+    @MainActor
+    private func makeEnterGroupShow() -> (ShowFile, MockProvider, Cue, [Cue], Cue) {
+        var show = ShowFile()
+        let provider = MockProvider()
+        let group = Cue(number: "10", name: "Deck", body: .group(GroupBody(mode: .enterAndPlayFirst)))
+        var children: [Cue] = []
+        for i in 1...3 {
+            var cue = Cue(number: "10.\(i)", body: .slide(SlideBody(
+                media: MediaReference(absolutePath: "/s\(i).png"),
+                outputGroupID: UUID()
+            )))
+            cue.parentID = group.id
+            provider.durations[cue.id] = 60
+            children.append(cue)
+        }
+        let after = Cue(number: "20", body: .stop(StopBody()))
+        show.cues = [group] + children + [after]
+        return (show, provider, group, children, after)
+    }
+
+    func testEnterGroupGOWalksChildrenThenExits() async {
+        var (show, provider, group, children, after) = makeEnterGroupShow()
+        _ = group
+        let transport = TransportController(provider: provider, show: { show }, showFolder: { nil })
+
+        transport.go()   // enters the deck: child 1
+        try? await Task.sleep(for: .seconds(0.1))
+        XCTAssertNotNil(provider.players[children[0].id])
+        XCTAssertEqual(transport.playheadID, children[1].id, "playhead steps INSIDE the group")
+
+        transport.go()   // child 2
+        try? await Task.sleep(for: .seconds(0.1))
+        XCTAssertNotNil(provider.players[children[1].id])
+        XCTAssertEqual(transport.playheadID, children[2].id)
+
+        transport.go()   // child 3 → exits past the group
+        try? await Task.sleep(for: .seconds(0.1))
+        XCTAssertEqual(transport.playheadID, after.id, "playhead exits to the cue after the group")
+    }
+
+    func testFiringEnterGroupHeaderPlaysFirstChild() async {
+        var (show, provider, group, children, _) = makeEnterGroupShow()
+        let transport = TransportController(provider: provider, show: { show }, showFolder: { nil })
+        transport.fire(cueID: group.id)
+        try? await Task.sleep(for: .seconds(0.1))
+        XCTAssertNotNil(provider.players[children[0].id], "header fire redirects to first child")
+        _ = show
+    }
+
+    func testAutoFollowChainsInsideEnterGroup() async {
+        var (show, provider, group, children, _) = makeEnterGroupShow()
+        _ = group
+        // Child 1 auto-follows into child 2; give it a short duration.
+        if let index = show.cues.firstIndex(where: { $0.id == children[0].id }) {
+            show.cues[index].follow = .autoFollow
+        }
+        provider.durations[children[0].id] = 0.15
+        let transport = TransportController(provider: provider, show: { show }, showFolder: { nil })
+        transport.go()
+        try? await Task.sleep(for: .seconds(0.4))
+        XCTAssertNotNil(provider.players[children[1].id], "enter-group children may chain follows")
+    }
+
+    // MARK: - Importer structure
+
+    func testImporterWrapsDeckInEnterGroup() {
+        let document = ShowDocumentController()
+        let app = AppModel()
+        let images = (1...3).map { URL(fileURLWithPath: "/cache/slide-00\($0).png") }
+        SlideDeckImporter.insertSlideCues(
+            images: images,
+            deckURL: URL(fileURLWithPath: "/decks/Opening Talk.pptx"),
+            at: nil, into: document, app: app
+        )
+        let cues = document.show.cues
+        XCTAssertEqual(cues.count, 5, "group + 3 slides + clear stop")
+        guard case .group(let groupBody) = cues[0].body else { return XCTFail() }
+        XCTAssertEqual(groupBody.mode, .enterAndPlayFirst)
+        XCTAssertEqual(cues[0].name, "Opening Talk")
+        XCTAssertEqual(cues[0].number, "1")
+        for child in cues[1...] {
+            XCTAssertEqual(child.parentID, cues[0].id, "all content nests under the deck group")
+        }
+        XCTAssertEqual(cues.map(\.number), ["1", "1.1", "1.2", "1.3", "1.4"])
+        guard case .stop(let stopBody) = cues[4].body else { return XCTFail("trailing clear cue") }
+        XCTAssertEqual(stopBody.targetID, cues[3].id, "clear stops the last slide")
+    }
+
     // MARK: - Renumbering
 
     func testRenumberAllTopToBottom() {

@@ -20,8 +20,9 @@ struct GroupTimelineTab: View {
                     )) {
                         Text("Start all together").tag(GroupMode.fireAll)
                         Text("Timeline").tag(GroupMode.timeline)
+                        Text("Enter and play first cue").tag(GroupMode.enterAndPlayFirst)
                     }
-                    .frame(width: 280)
+                    .frame(width: 320)
                     .disabled(app.isShowMode)
 
                     if group.mode == .timeline {
@@ -42,6 +43,11 @@ struct GroupTimelineTab: View {
                 switch group.mode {
                 case .fireAll:
                     Text("All children start the moment the group fires. Switch to Timeline to stagger them by dragging bars.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                case .enterAndPlayFirst:
+                    Text("GO on this group plays the first child and steps the playhead inside — each further GO advances to the next child, then exits past the group. Slide decks import this way.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)

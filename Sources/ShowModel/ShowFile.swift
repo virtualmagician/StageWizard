@@ -68,7 +68,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
 /// Root of the persisted show document.
 public struct ShowFile: Codable, Hashable, Sendable {
     /// 2: video/camera cues target OutputGroups instead of raw displays.
-    public static let currentFormatVersion = 2
+    /// 3: GroupMode.enterAndPlayFirst (older apps can't decode the new mode,
+    ///    so they must refuse v3 files cleanly instead of failing mid-parse).
+    public static let currentFormatVersion = 3
 
     public var formatVersion: Int
     public var settings: ShowSettings

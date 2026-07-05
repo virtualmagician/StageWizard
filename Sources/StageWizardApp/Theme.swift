@@ -19,7 +19,7 @@ enum Theme {
 
     // Signals
     static let standby = Color(red: 0.35, green: 0.85, blue: 0.35)   // standby green
-    static let go = Color(red: 0.30, green: 0.75, blue: 0.30)
+    static let go = accent   // GO wears the MagicLab blue (Marco's call)
     static let panic = Color(red: 0.90, green: 0.30, blue: 0.20)
     static let hold = accent
 

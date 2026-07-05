@@ -104,15 +104,24 @@ enum SlideDeckImporter {
 
     // MARK: - Cue construction
 
-    private static func insertSlideCues(
+    /// Decks land as an "enter and play first cue" GROUP named after the
+    /// deck: GO on the group starts slide 1 and each further GO advances,
+    /// ending on the trailing Clear cue that stops the last slide.
+    static func insertSlideCues(
         images: [URL], deckURL: URL,
         at insertIndex: Int?, into document: ShowDocumentController, app: AppModel
     ) {
         guard !images.isEmpty else { return }
         let sourceRef = MediaReference(fileURL: deckURL, showFolder: document.showFolder)
         let outputGroup = CueFactory.defaultOutputGroupID(in: document)
+        let deckName = (deckURL.lastPathComponent as NSString).deletingPathExtension
 
-        var newCues: [Cue] = []
+        let groupCue = Cue(
+            number: "",
+            name: deckName,
+            body: .group(GroupBody(mode: .enterAndPlayFirst))
+        )
+        var children: [Cue] = []
         for (index, imageURL) in images.enumerated() {
             let body = SlideBody(
                 media: MediaReference(fileURL: imageURL, showFolder: document.showFolder),
@@ -121,25 +130,32 @@ enum SlideDeckImporter {
                 slideCount: images.count,
                 outputGroupID: outputGroup
             )
-            newCues.append(Cue(number: "", body: .slide(body)))
+            var cue = Cue(number: "", body: .slide(body))
+            cue.parentID = groupCue.id
+            children.append(cue)
         }
-        // Trailing stop so the deck can end cleanly on the last GO.
-        let stop = Cue(
+        var stop = Cue(
             number: "",
-            name: "Clear “\((deckURL.lastPathComponent as NSString).deletingPathExtension)”",
-            body: .stop(StopBody(targetID: newCues.last?.id, fadeOutTime: 0.3))
+            name: "Clear “\(deckName)”",
+            body: .stop(StopBody(targetID: children.last?.id, fadeOutTime: 0.3))
         )
-        newCues.append(stop)
+        stop.parentID = groupCue.id
+        children.append(stop)
 
         document.mutate { show in
             var index = insertIndex.map { min($0, show.cues.count) } ?? show.cues.count
-            for var cue in newCues {
-                cue.number = show.nextCueNumber()
-                show.cues.insert(cue, at: index)
+            var group = groupCue
+            let groupNumber = show.nextCueNumber()
+            group.number = groupNumber
+            show.cues.insert(group, at: index)
+            index += 1
+            for (childIndex, var child) in children.enumerated() {
+                child.number = "\(groupNumber).\(childIndex + 1)"
+                show.cues.insert(child, at: index)
                 index += 1
             }
         }
-        document.selection = [newCues[0].id]
+        document.selection = [groupCue.id]
     }
 
     /// Largest pixel size among the default output group's displays.

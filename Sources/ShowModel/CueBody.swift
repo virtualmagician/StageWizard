@@ -468,6 +468,9 @@ public enum GroupMode: String, Codable, Hashable, Sendable, CaseIterable {
     case fireAll
     /// Children start at per-child offsets from group start.
     case timeline
+    /// GO on the group plays the FIRST child and moves the playhead inside;
+    /// each further GO advances to the next child (slide-deck navigation).
+    case enterAndPlayFirst
 }
 
 /// Children are the cues whose `parentID` is this group cue's id, in document

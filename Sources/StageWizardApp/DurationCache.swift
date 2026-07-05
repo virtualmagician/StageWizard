@@ -41,6 +41,8 @@ final class DurationCache {
             return body.fadeOutTime
         case .camera, .slide, .broken:
             return nil
+        case .group(let body) where body.mode == .enterAndPlayFirst:
+            return nil   // GO-driven container — no fixed duration
         case .group(let body):
             let children = show.children(of: cue.id)
             guard !children.isEmpty else { return 0 }

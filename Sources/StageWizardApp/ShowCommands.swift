@@ -78,6 +78,7 @@ struct ShowCommands: Commands {
                 .keyboardShortcut("d")
                 .disabled(app.isShowMode)
             Button("Delete Selected Cues") { CueFactory.deleteSelection(in: document) }
+                .keyboardShortcut(.delete, modifiers: .command)
                 .disabled(app.isShowMode)
         }
     }
