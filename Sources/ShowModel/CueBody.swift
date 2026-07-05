@@ -317,6 +317,26 @@ extension Int {
     var clampedToLayerRange: Int { Swift.min(Swift.max(self, 1), 10) }
 }
 
+/// Live effects applied to a camera cue's frames. All default OFF — a cue
+/// with effects disabled uses the zero-cost passthrough preview path.
+public struct CameraEffects: Codable, Hashable, Sendable {
+    /// Vision person segmentation: the background turns transparent, so
+    /// render layers BEHIND the camera show through around the performer.
+    public var segmentation: Bool
+    /// Particle emitters that follow the performer's hands.
+    public var magicDust: Bool
+    /// Particle Designer .pex emitter; nil = the built-in sparkle.
+    public var dustEmitter: MediaReference?
+
+    public init(segmentation: Bool = false, magicDust: Bool = false, dustEmitter: MediaReference? = nil) {
+        self.segmentation = segmentation
+        self.magicDust = magicDust
+        self.dustEmitter = dustEmitter
+    }
+
+    public var anyEnabled: Bool { segmentation || magicDust }
+}
+
 /// Live camera input shown fullscreen on a display. Video-only — sound stays
 /// with audio cues. Indefinite: runs until explicitly stopped.
 public struct CameraBody: Codable, Hashable, Sendable {
@@ -334,6 +354,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
     public var fadeOutDuration: TimeInterval
     /// Render order on the output, 1 (background) … 10 (front).
     public var layer: Int
+    /// Live effects (segmentation, magic dust) — all off by default.
+    public var effects: CameraEffects
 
     public init(
         cameraUID: String? = nil,
@@ -344,7 +366,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
         geometry: VideoGeometry = .fillStage,
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
-        layer: Int = 5
+        layer: Int = 5,
+        effects: CameraEffects = CameraEffects()
     ) {
         self.cameraUID = cameraUID
         self.cameraName = cameraName
@@ -355,11 +378,12 @@ public struct CameraBody: Codable, Hashable, Sendable {
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
         self.layer = layer.clampedToLayerRange
+        self.effects = effects
     }
 
     private enum CodingKeys: String, CodingKey {
         case cameraUID, cameraName, display, outputGroupID, fillMode, geometry
-        case fadeInDuration, fadeOutDuration, layer
+        case fadeInDuration, fadeOutDuration, layer, effects
     }
 
     public init(from decoder: Decoder) throws {
@@ -373,6 +397,7 @@ public struct CameraBody: Codable, Hashable, Sendable {
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
         layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
+        effects = try c.decodeIfPresent(CameraEffects.self, forKey: .effects) ?? CameraEffects()
     }
 }
 

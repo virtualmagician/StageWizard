@@ -51,7 +51,10 @@ final class EnginePlayerProvider: CuePlayerProviding {
             let targets = try resolveTargets(
                 groupID: body.outputGroupID, legacy: body.display, cueNumber: cue.number
             )
-            return try await CameraCuePlayer.arm(body: body, targets: targets)
+            return try await CameraCuePlayer.arm(
+                body: body, targets: targets,
+                dustEmitterURL: body.effects.dustEmitter?.resolve(showFolder: showFolder)
+            )
 
         case .slide(let body):
             guard let url = body.media.resolve(showFolder: showFolder) else {

@@ -233,6 +233,16 @@ final class AppModel {
         }
     }
 
+    /// Push a camera cue's effects to any running instances — segmentation
+    /// and magic dust toggle live, no session restart.
+    func pushEffects(cueID: UUID) {
+        guard let cue = document.cue(withID: cueID), case .camera(let body) = cue.body else { return }
+        let emitterURL = body.effects.dustEmitter?.resolve(showFolder: document.showFolder)
+        for instance in transport.registry.instances where instance.cue.id == cueID {
+            (instance.player as? CameraCuePlayer)?.applyEffects(body.effects, dustEmitterURL: emitterURL)
+        }
+    }
+
     /// Push a text cue's content to any running instances — the Text tab
     /// calls this after every edit so the stage updates as you type.
     func pushText(cueID: UUID) {

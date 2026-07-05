@@ -992,6 +992,7 @@ private struct OutputTab: View {
 /// Camera source, display, and fill mode for camera cues.
 private struct CameraOutputSettings: View {
     @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
     let cueID: UUID
 
     var body: some View {
@@ -1039,10 +1040,31 @@ private struct CameraOutputSettings: View {
                 Text("Placement and scaling moved to the Geometry tab.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+
+                Divider()
+                Text("Effects")
+                    .font(.headline)
+                Toggle("Remove background (person segmentation)", isOn: Binding(
+                    get: { camera.effects.segmentation },
+                    set: { v in updateEffects { $0.segmentation = v } }
+                ))
+                Text("The background turns transparent — put video or images on a LOWER layer (Geometry tab) and they show behind the performer.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
             .formStyle(.columns)
             .padding(12)
         }
+    }
+
+    private func updateEffects(_ change: (inout CameraEffects) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .camera(var b) = cue.body {
+                change(&b.effects)
+                cue.body = .camera(b)
+            }
+        }
+        app.pushEffects(cueID: cueID)
     }
 
     private func update(_ change: (inout CameraBody) -> Void) {

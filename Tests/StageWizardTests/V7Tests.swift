@@ -46,6 +46,80 @@ final class V7Tests: XCTestCase {
         XCTAssertEqual(low.layer, 1)
     }
 
+    // MARK: - Camera effects
+
+    func testCameraEffectsDefaultOffForOlderFiles() throws {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .camera(CameraBody()))]
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var cues = json["cues"] as! [[String: Any]]
+        var body = cues[0]["body"] as! [String: Any]
+        body.removeValue(forKey: "effects")
+        cues[0]["body"] = body
+        json["cues"] = cues
+        let decoded = try ShowFile.load(from: try JSONSerialization.data(withJSONObject: json))
+        guard case .camera(let camera) = decoded.cues[0].body else { return XCTFail() }
+        XCTAssertFalse(camera.effects.segmentation)
+        XCTAssertFalse(camera.effects.magicDust)
+        XCTAssertFalse(camera.effects.anyEnabled)
+    }
+
+    func testCameraEffectsRoundTrip() throws {
+        let effects = CameraEffects(
+            segmentation: true, magicDust: true,
+            dustEmitter: MediaReference(absolutePath: "/fx/sparkle.pex")
+        )
+        let body = CameraBody(effects: effects)
+        let data = try JSONEncoder().encode(body)
+        let decoded = try JSONDecoder().decode(CameraBody.self, from: data)
+        XCTAssertTrue(decoded.effects.segmentation)
+        XCTAssertTrue(decoded.effects.magicDust)
+        XCTAssertEqual(decoded.effects.dustEmitter?.fileName, "sparkle.pex")
+    }
+
+    // MARK: - Capture → layer coordinate mapping
+
+    func testMapNormalizedPointStretch() {
+        let p = mapNormalizedPoint(
+            CGPoint(x: 0.25, y: 0.5),
+            bufferSize: CGSize(width: 1920, height: 1080),
+            layerSize: CGSize(width: 800, height: 800),
+            fillMode: .stretch
+        )
+        XCTAssertEqual(p, CGPoint(x: 200, y: 400))
+    }
+
+    func testMapNormalizedPointFitLetterboxes() {
+        // 16:9 buffer in a square layer → letterboxed: 800×450 centered.
+        let center = mapNormalizedPoint(
+            CGPoint(x: 0.5, y: 0.5),
+            bufferSize: CGSize(width: 1920, height: 1080),
+            layerSize: CGSize(width: 800, height: 800),
+            fillMode: .fit
+        )
+        XCTAssertEqual(center, CGPoint(x: 400, y: 400))
+        let bottomLeft = mapNormalizedPoint(
+            .zero,
+            bufferSize: CGSize(width: 1920, height: 1080),
+            layerSize: CGSize(width: 800, height: 800),
+            fillMode: .fit
+        )
+        XCTAssertEqual(bottomLeft.x, 0, accuracy: 0.001)
+        XCTAssertEqual(bottomLeft.y, (800 - 450) / 2, accuracy: 0.001, "letterbox band below the image")
+    }
+
+    func testMapNormalizedPointFillCrops() {
+        // 16:9 buffer filling a square layer → 1422×800, x cropped.
+        let bottomLeft = mapNormalizedPoint(
+            .zero,
+            bufferSize: CGSize(width: 1920, height: 1080),
+            layerSize: CGSize(width: 800, height: 800),
+            fillMode: .fill
+        )
+        XCTAssertEqual(bottomLeft.y, 0, accuracy: 0.001)
+        XCTAssertLessThan(bottomLeft.x, 0, "cropped content maps off the left edge")
+    }
+
     // MARK: - Text cues
 
     private func makeRTF(_ string: String) -> Data {
