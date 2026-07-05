@@ -292,7 +292,9 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
                     extLog.error("consumeSampleBuffer error #\(self.consumeErrorCount) from client \(client.clientID, privacy: .public): \((error as NSError).domain, privacy: .public) \((error as NSError).code) — \(error.localizedDescription, privacy: .public)")
                 }
                 // Persistent errors would otherwise spin hot.
-                self.stateQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                // NOT stateQueue: consumeBuffer syncs onto it — retrying
+                // from it deadlocks and dispatch kills the process.
+                self.timerQueue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     self?.consumeBuffer()
                 }
                 return
