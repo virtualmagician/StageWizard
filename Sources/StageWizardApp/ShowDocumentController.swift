@@ -24,6 +24,8 @@ final class ShowDocumentController {
     /// Fired after new/open replaced the document — the transport must reset
     /// (stop stale playback, clear the old show's playhead).
     @ObservationIgnored var onDocumentReplaced: (@MainActor () -> Void)?
+    /// Fired whenever the recents list gained an entry (open/save).
+    @ObservationIgnored var onRecentsChanged: (@MainActor () -> Void)?
 
     private var autosaveTimer: Timer?
 
@@ -91,6 +93,7 @@ final class ShowDocumentController {
             selection = []
             isDirty = false
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            onRecentsChanged?()
             onDocumentReplaced?()
         } catch {
             presentError("Couldn't open \(url.lastPathComponent)", error)
@@ -126,6 +129,7 @@ final class ShowDocumentController {
             fileURL = url
             isDirty = false
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            onRecentsChanged?()
             return true
         } catch {
             presentError("Couldn't save show", error)
@@ -148,6 +152,15 @@ final class ShowDocumentController {
                     body.media.rebase(resolvedURL: resolved, showFolder: newShowFolder)
                     show.cues[index].body = .video(body)
                 }
+            case .slide(var body):
+                if let resolved = body.media.resolve(showFolder: oldFolder) {
+                    body.media.rebase(resolvedURL: resolved, showFolder: newShowFolder)
+                }
+                if var source = body.sourceDeck, let resolved = source.resolve(showFolder: oldFolder) {
+                    source.rebase(resolvedURL: resolved, showFolder: newShowFolder)
+                    body.sourceDeck = source
+                }
+                show.cues[index].body = .slide(body)
             default:
                 break
             }

@@ -151,16 +151,35 @@ public final class TransportController {
         instance.onActionCompleted = { [weak self] instance in
             self?.actionCompleted(for: instance)
         }
+        instance.onActionStarted = { [weak self] instance in
+            self?.actionStarted(for: instance)
+        }
         instance.onTerminated = { [weak self] instance in
             self?.instanceTerminated(instance)
         }
         return instance
     }
 
+    /// Slide semantics: starting a slide crossfades out other slides running
+    /// on the SAME output (the new one is layered above, so it reads as a
+    /// crossfade). Different outputs are untouched.
+    private func actionStarted(for instance: CueInstance) {
+        guard case .slide(let body) = instance.cue.body, body.replacesPreviousSlide else { return }
+        let fade = max(body.fadeInDuration, 0.15)
+        for other in registry.instances where other.id != instance.id && !other.state.isTerminal {
+            if case .slide(let otherBody) = other.cue.body, otherBody.outputGroupID == body.outputGroupID {
+                other.fadeOutAndStop(duration: fade)
+            }
+        }
+    }
+
     private func adoptChild(_ child: CueInstance) {
         registry.add(child)
         child.onActionCompleted = { [weak self] instance in
             self?.actionCompleted(for: instance)
+        }
+        child.onActionStarted = { [weak self] instance in
+            self?.actionStarted(for: instance)
         }
         // Nested groups: grandchildren must be adopted too or they are
         // invisible to the panel and untargetable by fade/stop cues.

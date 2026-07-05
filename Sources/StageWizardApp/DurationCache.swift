@@ -39,7 +39,7 @@ final class DurationCache {
             return body.duration
         case .stop(let body):
             return body.fadeOutTime
-        case .camera, .broken:
+        case .camera, .slide, .broken:
             return nil
         case .group(let body):
             let children = show.children(of: cue.id)

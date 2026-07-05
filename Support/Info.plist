@@ -41,6 +41,8 @@
 	<string>public.app-category.entertainment</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.1</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>StageWizard shows live camera input on stage displays through Camera cues.</string>
 	<key>NSHumanReadableCopyright</key>

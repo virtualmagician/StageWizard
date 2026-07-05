@@ -7,6 +7,7 @@ public enum CueBody: Hashable, Sendable {
     case audio(AudioBody)
     case video(VideoBody)
     case camera(CameraBody)
+    case slide(SlideBody)
     case fade(FadeBody)
     case stop(StopBody)
     case group(GroupBody)
@@ -17,6 +18,11 @@ public enum CueBody: Hashable, Sendable {
         case .audio(let body): return body.media.fileName
         case .video(let body): return body.media.fileName
         case .camera(let body): return body.cameraName ?? "Camera"
+        case .slide(let body):
+            if let index = body.slideIndex, let count = body.slideCount {
+                return "\(body.deckName) · \(index)/\(count)"
+            }
+            return body.media.fileName
         case .fade: return "Fade"
         case .stop: return "Stop"
         case .group(let body): return body.mode == .timeline ? "Timeline Group" : "Group"
@@ -29,6 +35,7 @@ public enum CueBody: Hashable, Sendable {
         case .audio: return "Audio"
         case .video: return "Video"
         case .camera: return "Camera"
+        case .slide: return "Slide"
         case .fade: return "Fade"
         case .stop: return "Stop"
         case .group: return "Group"
@@ -43,7 +50,7 @@ extension CueBody: Codable {
     }
 
     private enum Kind: String, Codable {
-        case audio, video, camera, fade, stop, group
+        case audio, video, camera, slide, fade, stop, group
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +60,7 @@ extension CueBody: Codable {
         case .audio: self = .audio(try AudioBody(from: decoder))
         case .video: self = .video(try VideoBody(from: decoder))
         case .camera: self = .camera(try CameraBody(from: decoder))
+        case .slide: self = .slide(try SlideBody(from: decoder))
         case .fade: self = .fade(try FadeBody(from: decoder))
         case .stop: self = .stop(try StopBody(from: decoder))
         case .group: self = .group(try GroupBody(from: decoder))
@@ -71,6 +79,9 @@ extension CueBody: Codable {
             try body.encode(to: encoder)
         case .camera(let body):
             try container.encode(Kind.camera, forKey: .type)
+            try body.encode(to: encoder)
+        case .slide(let body):
+            try container.encode(Kind.slide, forKey: .type)
             try body.encode(to: encoder)
         case .fade(let body):
             try container.encode(Kind.fade, forKey: .type)
@@ -328,6 +339,77 @@ public struct CameraBody: Codable, Hashable, Sendable {
         geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+    }
+}
+
+/// One slide of an imported deck, rendered to a still image at import time
+/// (PowerPoint/PDF decks are flattened — the research showed no live path
+/// survives a stage). Indefinite like a camera cue: holds until stopped.
+/// Starting the next slide on the same output replaces this one (crossfade).
+public struct SlideBody: Codable, Hashable, Sendable {
+    /// The rendered slide image (PNG in the slide cache).
+    public var media: MediaReference
+    /// The original deck (.pptx/.pdf) for reconversion.
+    public var sourceDeck: MediaReference?
+    /// 1-based position within the deck, for display.
+    public var slideIndex: Int?
+    public var slideCount: Int?
+    /// Virtual output; nil = unassigned (won't play), like video.
+    public var outputGroupID: UUID?
+    public var fillMode: FillMode
+    public var geometry: VideoGeometry
+    public var fadeInDuration: TimeInterval
+    public var fadeOutDuration: TimeInterval
+    /// Starting this slide fades out other running slides on the same output.
+    public var replacesPreviousSlide: Bool
+
+    public init(
+        media: MediaReference,
+        sourceDeck: MediaReference? = nil,
+        slideIndex: Int? = nil,
+        slideCount: Int? = nil,
+        outputGroupID: UUID? = nil,
+        fillMode: FillMode = .fit,
+        geometry: VideoGeometry = .fillStage,
+        fadeInDuration: TimeInterval = 0.15,
+        fadeOutDuration: TimeInterval = 0,
+        replacesPreviousSlide: Bool = true
+    ) {
+        self.media = media
+        self.sourceDeck = sourceDeck
+        self.slideIndex = slideIndex
+        self.slideCount = slideCount
+        self.outputGroupID = outputGroupID
+        self.fillMode = fillMode
+        self.geometry = geometry
+        self.fadeInDuration = fadeInDuration
+        self.fadeOutDuration = fadeOutDuration
+        self.replacesPreviousSlide = replacesPreviousSlide
+    }
+
+    /// Deck display name derived from the source (or the image as fallback).
+    public var deckName: String {
+        let name = (sourceDeck ?? media).fileName
+        return (name as NSString).deletingPathExtension
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case media, sourceDeck, slideIndex, slideCount, outputGroupID
+        case fillMode, geometry, fadeInDuration, fadeOutDuration, replacesPreviousSlide
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        media = try c.decode(MediaReference.self, forKey: .media)
+        sourceDeck = try c.decodeIfPresent(MediaReference.self, forKey: .sourceDeck)
+        slideIndex = try c.decodeIfPresent(Int.self, forKey: .slideIndex)
+        slideCount = try c.decodeIfPresent(Int.self, forKey: .slideCount)
+        outputGroupID = try c.decodeIfPresent(UUID.self, forKey: .outputGroupID)
+        fillMode = try c.decode(FillMode.self, forKey: .fillMode)
+        geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
+        fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
+        fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        replacesPreviousSlide = try c.decodeIfPresent(Bool.self, forKey: .replacesPreviousSlide) ?? true
     }
 }
 

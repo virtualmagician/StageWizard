@@ -56,9 +56,10 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   `MediaPlayback` protocol, `CuePlayerProviding`.
 - `Sources/AudioEngineKit/` — one AVAudioEngine per output device, pooled
   player nodes, sample-accurate `scheduleSegment` trim, HAL hot-plug.
-- `Sources/VideoEngineKit/` — video + camera players, `OutputTarget`
-  (real display | rehearsal preview), `OutputWindowManager` (leased windows),
-  `DisplayManager` (fingerprint matching), geometry transforms.
+- `Sources/VideoEngineKit/` — video + camera + still (slide) players,
+  `OutputTarget` (real display | rehearsal preview), `OutputWindowManager`
+  (leased windows), `DisplayManager` (fingerprint matching), geometry
+  transforms.
 - `Sources/FadeKit/` — FadeClock + curves.
 - `Sources/ShortcutKit/` — local keyDown monitor + recorder (Esc = panic,
   hardwired; pass-through while text editing / sheets).
@@ -75,6 +76,14 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - Fade cue with no target is a warned no-op; targeting a group reaches children.
 - Output groups may span displays → one decode mirrors to N layers.
 - Rehearsal mode routes video/camera to floating preview windows only.
+- Slide cues hold until stopped; starting a slide crossfades out other slides
+  on the SAME output group only. Decks are flattened at IMPORT (never any
+  external process at showtime) via `SlideDeckImporter`'s probed chain:
+  ONLYOFFICE x2t (needs BOTH font params or glyphs garble) → PowerPoint →
+  Keynote (AppleScript export, apple-events entitlement) → LibreOffice
+  headless (private profile flag is load-bearing) → PDF via PDFKit
+  (zero-dependency floor). Rendered PNGs live in
+  ~/Library/Application Support/StageWizard/SlideCache/.
 
 ## Release / credentials (machine-local, no secrets in repo)
 

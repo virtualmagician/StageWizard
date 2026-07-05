@@ -24,6 +24,22 @@ struct ShowCommands: Commands {
                 .keyboardShortcut("n")
             Button("Open Show…") { document.openDocument() }
                 .keyboardShortcut("o")
+            Menu("Open Recent") {
+                ForEach(app.recentShows, id: \.self) { url in
+                    Button(url.deletingPathExtension().lastPathComponent) {
+                        document.open(url: url)
+                    }
+                    .disabled(!FileManager.default.fileExists(atPath: url.path))
+                }
+                if !app.recentShows.isEmpty {
+                    Divider()
+                }
+                Button("Clear Menu") {
+                    NSDocumentController.shared.clearRecentDocuments(nil)
+                    app.refreshRecents()
+                }
+                .disabled(app.recentShows.isEmpty)
+            }
         }
         CommandGroup(replacing: .saveItem) {
             Button("Save") { document.save() }
@@ -50,6 +66,12 @@ struct ShowCommands: Commands {
                 .disabled(app.isShowMode)
             Button("Add Group") { CueFactory.addControlCue(.group(GroupBody()), to: document) }
                 .keyboardShortcut("6", modifiers: [.command, .shift])
+                .disabled(app.isShowMode)
+            Button("Add Slides from Deck…") { SlideDeckImporter.importDeckViaPanel(into: document, app: app) }
+                .keyboardShortcut("7", modifiers: [.command, .shift])
+                .disabled(app.isShowMode)
+            Divider()
+            Button("Renumber All Cues") { CueFactory.renumberAll(in: document) }
                 .disabled(app.isShowMode)
             Divider()
             Button("Duplicate Selected Cues") { CueFactory.duplicateSelection(in: document) }
@@ -98,6 +120,35 @@ enum CueFactory {
     /// camera cues default to the first configured group.
     static func defaultOutputGroupID(in document: ShowDocumentController) -> UUID? {
         document.show.settings.outputGroups.first?.id
+    }
+
+    /// Top-to-bottom renumber: top-level cues 10, 20, 30…; children take
+    /// "<parent>.1", "<parent>.2"… Numbers are display-only (targets use
+    /// UUIDs), so this never breaks references.
+    static func renumberAll(in document: ShowDocumentController) {
+        document.mutate { show in
+            show.cues = renumbered(show.cues)
+        }
+    }
+
+    static func renumbered(_ cues: [Cue]) -> [Cue] {
+        var result = cues
+        var topNumber = 0
+        var parentNumbers: [UUID: String] = [:]
+        var childCounters: [UUID: Int] = [:]
+        for index in result.indices {
+            if let parentID = result[index].parentID {
+                let count = (childCounters[parentID] ?? 0) + 1
+                childCounters[parentID] = count
+                let parentNumber = parentNumbers[parentID] ?? "?"
+                result[index].number = "\(parentNumber).\(count)"
+            } else {
+                topNumber += 10
+                result[index].number = "\(topNumber)"
+                parentNumbers[result[index].id] = "\(topNumber)"
+            }
+        }
+        return result
     }
 
     /// Insert after the last selected cue (or append), inheriting its parent

@@ -165,9 +165,16 @@ struct CueListView: View {
                 }
             }
             guard !urls.isEmpty else { return }
-            let skipped = CueFactory.importMedia(urls: urls, at: insertAt, into: document)
+            // Presentation decks take the slide-import pipeline.
+            let decks = urls.filter { SlideDeckImporter.isDeck($0) }
+            let media = urls.filter { !SlideDeckImporter.isDeck($0) }
+            for deck in decks {
+                SlideDeckImporter.importDeck(url: deck, at: insertAt, into: document, app: app)
+            }
+            guard !media.isEmpty else { return }
+            let skipped = CueFactory.importMedia(urls: media, at: insertAt, into: document)
             if skipped > 0 {
-                app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio or video.")
+                app.pushWarning("\(skipped) dropped file\(skipped == 1 ? "" : "s") skipped — not audio, video, or a deck.")
             }
         }
     }
@@ -310,6 +317,9 @@ struct CueRowView: View {
         if case .camera = cue.body {
             Text("∞")
                 .foregroundStyle(.secondary)
+        } else if case .slide = cue.body {
+            Text("∞")
+                .foregroundStyle(.secondary)
         } else if let duration = DurationCache.shared.effectiveDuration(
             of: cue, in: document.show, showFolder: document.showFolder
         ) {
@@ -366,6 +376,7 @@ struct CueRowView: View {
         switch cue.body {
         case .video(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
         case .camera(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
+        case .slide(let body): groupID = .some(body.outputGroupID)
         default: return false
         }
         guard let groupID else { return false }   // legacy direct display: handled at arm
@@ -377,6 +388,7 @@ struct CueRowView: View {
         let media: MediaReference? = switch cue.body {
         case .audio(let body): body.media
         case .video(let body): body.media
+        case .slide(let body): body.media
         default: nil
         }
         guard let media else { return false }
@@ -414,6 +426,7 @@ func typeSymbol(_ body: CueBody) -> String {
     case .audio: return "waveform"
     case .video: return "film"
     case .camera: return "video.fill"
+    case .slide: return "photo"
     case .fade: return "dial.low"
     case .stop: return "stop.fill"
     case .group: return "folder"

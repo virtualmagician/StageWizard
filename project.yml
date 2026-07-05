@@ -18,6 +18,10 @@ targets:
   StageWizard:
     type: application
     platform: macOS
+    entitlements:
+      path: Support/StageWizard.entitlements
+      properties:
+        com.apple.security.automation.apple-events: true
     sources:
       - Sources
       - path: Support/AppIcon.icns
@@ -39,6 +43,7 @@ targets:
         CFBundleDisplayName: StageWizard
         CFBundleIconFile: AppIcon
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
+        NSAppleEventsUsageDescription: StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.
         CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "2"
         LSApplicationCategoryType: public.app-category.entertainment

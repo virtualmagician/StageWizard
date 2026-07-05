@@ -19,6 +19,14 @@ final class AppModel {
     /// Recent operator-facing warnings (broken media, missing devices…).
     private(set) var warnings: [OperatorWarning] = []
 
+    /// Recently opened shows (File → Open Recent), mirrored from
+    /// NSDocumentController so the SwiftUI menu can observe changes.
+    private(set) var recentShows: [URL] = []
+
+    func refreshRecents() {
+        recentShows = NSDocumentController.shared.recentDocumentURLs
+    }
+
     /// Workspace mode, persisted in the show file. Show and
     /// Rehearsal both lock editing; Rehearsal additionally routes video/camera
     /// output into floating preview windows (one per output group) instead of
@@ -82,6 +90,10 @@ final class AppModel {
         transport.onOperatorWarning = { [weak self] message in
             self?.pushWarning(message)
         }
+        document.onRecentsChanged = { [weak self] in
+            self?.refreshRecents()
+        }
+        refreshRecents()
         document.onDocumentReplaced = { [weak self] in
             guard let self else { return }
             self.transport.reset()
@@ -131,6 +143,7 @@ final class AppModel {
                 let targets: [CGDirectDisplayID] =
                     (instance.player as? VideoCuePlayer)?.displayIDs
                     ?? (instance.player as? CameraCuePlayer)?.displayIDs
+                    ?? (instance.player as? StillCuePlayer)?.displayIDs
                     ?? []
                 guard !targets.isEmpty else { continue }
                 let survivors = targets.filter(liveIDs.contains)
@@ -156,12 +169,14 @@ final class AppModel {
         let settings: (VideoGeometry, FillMode)? = switch cue.body {
         case .video(let body): (body.geometry, body.fillMode)
         case .camera(let body): (body.geometry, body.fillMode)
+        case .slide(let body): (body.geometry, body.fillMode)
         default: nil
         }
         guard let (geometry, fillMode) = settings else { return }
         for instance in transport.registry.instances where instance.cue.id == cueID {
             (instance.player as? VideoCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
             (instance.player as? CameraCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
+            (instance.player as? StillCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
         }
     }
 

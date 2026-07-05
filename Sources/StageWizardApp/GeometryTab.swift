@@ -101,6 +101,7 @@ struct GeometryTab: View {
         switch cue.body {
         case .video(let body): return body.geometry
         case .camera(let body): return body.geometry
+        case .slide(let body): return body.geometry
         default: return nil
         }
     }
@@ -111,6 +112,7 @@ struct GeometryTab: View {
                 switch document.cue(withID: cueID)?.body {
                 case .video(let body): body.fillMode
                 case .camera(let body): body.fillMode
+                case .slide(let body): body.fillMode
                 default: .fit
                 }
             },
@@ -119,6 +121,7 @@ struct GeometryTab: View {
                     switch cue.body {
                     case .video(var body): body.fillMode = newValue; cue.body = .video(body)
                     case .camera(var body): body.fillMode = newValue; cue.body = .camera(body)
+                    case .slide(var body): body.fillMode = newValue; cue.body = .slide(body)
                     default: break
                     }
                 }
@@ -132,6 +135,7 @@ struct GeometryTab: View {
             switch cue.body {
             case .video(var body): change(&body.geometry); cue.body = .video(body)
             case .camera(var body): change(&body.geometry); cue.body = .camera(body)
+            case .slide(var body): change(&body.geometry); cue.body = .slide(body)
             default: break
             }
         }

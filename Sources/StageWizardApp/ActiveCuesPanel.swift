@@ -17,7 +17,7 @@ struct ActiveCuesPanel: View {
                         .font(.caption.weight(.bold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(.green.opacity(0.25), in: Capsule())
+                        .background(Theme.accent.opacity(0.35), in: Capsule())
                 }
             }
             .padding(.horizontal, 12)

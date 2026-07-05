@@ -39,6 +39,7 @@ struct StageWizardApp: App {
             ContentView()
                 .environment(app)
                 .environment(app.document)
+                .tint(Theme.accent)   // MagicLab brand accent, app-wide
                 .frame(minWidth: 980, minHeight: 600)
         }
         .commands {

@@ -19,7 +19,7 @@ struct InspectorView: View {
             switch body {
             case .group: return [.basics, .timeline, .triggers]
             case .audio: return [.basics, .timeAndLevels, .output, .triggers]
-            case .video, .camera: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
+            case .video, .camera, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .fade, .stop: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
@@ -219,6 +219,8 @@ private struct TimeAndLevelsTab: View {
             MediaTimingForm(cueID: cueID)
         case .camera:
             CameraTimingForm(cueID: cueID)
+        case .slide:
+            SlideTimingForm(cueID: cueID)
         case .fade:
             FadeForm(cueID: cueID)
         case .stop:
@@ -481,6 +483,80 @@ private struct CameraTimingForm: View {
     }
 }
 
+/// Slides hold until stopped/replaced — fades + deck info + reconversion.
+private struct SlideTimingForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .slide(let slide) = cue.body {
+            Form {
+                if let index = slide.slideIndex, let count = slide.slideCount {
+                    Text("Slide \(index) of \(count) from “\(slide.deckName)” — holds until stopped; the next slide on the same output replaces it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                TimecodeField(label: "Fade in", value: Binding(
+                    get: { slide.fadeInDuration },
+                    set: { v in update { $0.fadeInDuration = max(0, v) } }
+                ))
+                Toggle("Replace previous slide on this output", isOn: Binding(
+                    get: { slide.replacesPreviousSlide },
+                    set: { v in update { $0.replacesPreviousSlide = v } }
+                ))
+                if slide.sourceDeck != nil {
+                    Button("Reconvert Deck from Source…") {
+                        SlideDeckImporter.reconvert(cueID: cueID, document: document, app: app)
+                    }
+                    .disabled(app.isShowMode)
+                }
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout SlideBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .slide(var b) = cue.body {
+                change(&b)
+                cue.body = .slide(b)
+            }
+        }
+    }
+}
+
+private struct SlideOutputSettings: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .slide(let slide) = cue.body {
+            Form {
+                OutputGroupPicker(selection: Binding(
+                    get: { slide.outputGroupID },
+                    set: { v in
+                        document.updateCue(cueID) { cue in
+                            if case .slide(var b) = cue.body {
+                                b.outputGroupID = v
+                                cue.body = .slide(b)
+                            }
+                        }
+                    }
+                ))
+                if slide.outputGroupID == nil {
+                    Label("No output assigned — the slide won't play.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+}
+
 private struct FadeForm: View {
     @Environment(ShowDocumentController.self) private var document
     let cueID: UUID
@@ -583,7 +659,7 @@ struct CueTargetPicker: View {
 extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
-        case .audio, .video, .camera, .group: return true
+        case .audio, .video, .camera, .slide, .group: return true
         case .fade, .stop, .broken: return false
         }
     }
@@ -613,6 +689,8 @@ private struct OutputTab: View {
             }
         case .camera:
             CameraOutputSettings(cueID: cueID)
+        case .slide:
+            SlideOutputSettings(cueID: cueID)
         default:
             Text("No output settings for this cue type.")
                 .foregroundStyle(.secondary)
