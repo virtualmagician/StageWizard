@@ -108,6 +108,8 @@ struct ModeBar: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 230)
+            // The selected segment wears the tint — red while LIVE.
+            .tint(app.mode == .show ? Theme.panic : Theme.accent)
             .help("Show locks editing (⌘E). Rehearsal keeps editing and routes video into floating preview windows (⌘R). GO, panic, and the Active Cues panel always stay live.")
 
             switch app.mode {

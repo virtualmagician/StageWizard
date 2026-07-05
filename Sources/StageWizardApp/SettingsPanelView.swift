@@ -117,11 +117,14 @@ private struct OutputGroupsTab: View {
             switch app.virtualCamera.status {
             case .active:
                 if !app.virtualCamera.isFeeding {
-                    Button("Start Feed") { Task { await app.virtualCamera.startFeeding() } }
+                    Button("Start Feed") { app.setVirtualCameraFeed(true) }
                 } else {
-                    Button("Stop Feed") { app.virtualCamera.stopFeeding() }
+                    Button("Stop Feed") { app.setVirtualCameraFeed(false) }
                 }
-                Button("Deactivate") { app.virtualCamera.deactivate() }
+                Button("Deactivate") {
+                    app.setVirtualCameraFeed(false)
+                    app.virtualCamera.deactivate()
+                }
             case .activating:
                 ProgressView().controlSize(.small)
             default:

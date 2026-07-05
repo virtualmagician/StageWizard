@@ -21,6 +21,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     public var outputGroups: [OutputGroup]
     /// Last saved workspace mode — restored on open.
     public var workspaceMode: WorkspaceMode
+    /// Whether the virtual-webcam feed should run for this show —
+    /// restored on open (when the camera extension is active).
+    public var virtualCameraFeed: Bool
 
     public init(
         panicDuration: TimeInterval = 3,
@@ -28,7 +31,8 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         armAheadCount: Int = 3,
         keyBindings: [ShortcutAction: KeyBinding] = ShowSettings.defaultBindings,
         outputGroups: [OutputGroup] = [],
-        workspaceMode: WorkspaceMode = .edit
+        workspaceMode: WorkspaceMode = .edit,
+        virtualCameraFeed: Bool = false
     ) {
         self.panicDuration = panicDuration
         self.doubleGOProtection = doubleGOProtection
@@ -36,10 +40,12 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         self.keyBindings = keyBindings
         self.outputGroups = outputGroups
         self.workspaceMode = workspaceMode
+        self.virtualCameraFeed = virtualCameraFeed
     }
 
     private enum CodingKeys: String, CodingKey {
         case panicDuration, doubleGOProtection, armAheadCount, keyBindings, outputGroups, workspaceMode
+        case virtualCameraFeed
     }
 
     public init(from decoder: Decoder) throws {
@@ -51,6 +57,7 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         // v1/v2 files predate output groups.
         outputGroups = try container.decodeIfPresent([OutputGroup].self, forKey: .outputGroups) ?? []
         workspaceMode = try container.decodeIfPresent(WorkspaceMode.self, forKey: .workspaceMode) ?? .edit
+        virtualCameraFeed = try container.decodeIfPresent(Bool.self, forKey: .virtualCameraFeed) ?? false
     }
 
     public func group(withID id: UUID) -> OutputGroup? {

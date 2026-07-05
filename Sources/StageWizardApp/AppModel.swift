@@ -113,6 +113,7 @@ final class AppModel {
             // Restore the saved workspace mode without re-dirtying the
             // freshly opened document.
             self.setMode(self.document.show.settings.workspaceMode, persist: false)
+            self.syncVirtualCameraFeed()
         }
 
         shortcuts.bindingsProvider = { [weak self] in
@@ -144,6 +145,9 @@ final class AppModel {
         }
         virtualCamera.onWarning = { [weak self] message in
             self?.pushWarning(message)
+        }
+        virtualCamera.onBecameActive = { [weak self] in
+            self?.syncVirtualCameraFeed()
         }
         // Preview resizes invalidate stage-relative transforms — re-push.
         OutputWindowManager.shared.onPreviewResized = { [weak self] in
@@ -245,6 +249,27 @@ final class AppModel {
 
     /// The virtual webcam ("StageWizard Camera") — activation + frame feed.
     let virtualCamera = VirtualCameraManager()
+
+    /// Start/stop the virtual-webcam feed AND remember the choice in the
+    /// show file — reopening the show restores it (extension permitting).
+    func setVirtualCameraFeed(_ enabled: Bool) {
+        document.mutate { $0.settings.virtualCameraFeed = enabled }
+        applyVirtualCameraFeed(enabled)
+    }
+
+    /// Reconcile the running feed with what the current show wants.
+    func syncVirtualCameraFeed() {
+        applyVirtualCameraFeed(document.show.settings.virtualCameraFeed)
+    }
+
+    private func applyVirtualCameraFeed(_ wanted: Bool) {
+        if wanted {
+            guard virtualCamera.status == .active, !virtualCamera.isFeeding else { return }
+            Task { await virtualCamera.startFeeding() }
+        } else if virtualCamera.isFeeding {
+            virtualCamera.stopFeeding()
+        }
+    }
 
     /// Push a camera cue's effects to any running instances — segmentation
     /// and magic dust toggle live, no session restart.

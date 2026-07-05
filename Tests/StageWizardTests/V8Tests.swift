@@ -39,6 +39,23 @@ final class V8Tests: XCTestCase {
         XCTAssertTrue(decoded.settings.outputGroups[0].virtualCamera)
     }
 
+    // MARK: - Virtual-webcam feed state in the show file
+
+    func testVirtualCameraFeedRoundTripsAndDefaultsOff() throws {
+        var show = ShowFile()
+        show.settings.virtualCameraFeed = true
+        let decoded = try ShowFile.load(from: show.encoded())
+        XCTAssertTrue(decoded.settings.virtualCameraFeed)
+
+        // Older files without the key land on off.
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings.removeValue(forKey: "virtualCameraFeed")
+        json["settings"] = settings
+        let old = try ShowFile.load(from: try JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(old.settings.virtualCameraFeed)
+    }
+
     // MARK: - Dust presets + scale
 
     func testDustScaleAndPresetRoundTripWithClamping() throws {

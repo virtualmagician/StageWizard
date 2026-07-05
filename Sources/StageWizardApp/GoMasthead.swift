@@ -37,7 +37,8 @@ struct GoMasthead: View {
                 .frame(width: 96, height: 88)
         }
         .buttonStyle(.borderedProminent)
-        .tint(Theme.go)
+        // Red GO = the workspace is LIVE (Show mode).
+        .tint(app.isShowMode ? Theme.panic : Theme.go)
         .disabled(app.transport.standingByCue == nil || app.transport.isPanicking)
         .help("Fire the standing-by cue (Space)")
     }

@@ -41,6 +41,9 @@ final class VirtualCameraManager: NSObject {
     private(set) var isFeeding = false
 
     var onWarning: (@MainActor (String) -> Void)?
+    /// Fired when the extension becomes usable — the app decides whether
+    /// the current show wants the feed running.
+    var onBecameActive: (@MainActor () -> Void)?
 
     private let feed = SinkFeed()
     private var stream: SCStream?
@@ -61,7 +64,7 @@ final class VirtualCameraManager: NSObject {
             self.log.info("launch probe: extension device \(device.map(String.init(describing:)) ?? "NOT FOUND")")
             if device != nil {
                 self.status = .active
-                await self.startFeeding()
+                self.onBecameActive?()
             }
         }
     }
@@ -227,7 +230,7 @@ extension VirtualCameraManager: OSSystemExtensionRequestDelegate {
     ) {
         Task { @MainActor in
             self.status = .active
-            await self.startFeeding()
+            self.onBecameActive?()
         }
     }
 
