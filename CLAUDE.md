@@ -94,7 +94,8 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   additive blend deliberately approximated with plain alpha.
 - Fade cue with no target is a warned no-op; targeting a group reaches children.
 - Output groups may span displays → one decode mirrors to N layers.
-- Rehearsal mode routes video/camera to floating preview windows only.
+- Rehearsal mode routes video/camera to floating preview windows only —
+  and stays fully EDITABLE (only Show mode locks; isShowMode == (mode == .show)).
 - Launch auto-opens the most recent still-existing show (unless opened via
   Finder); quit is guarded twice: locked-workspace confirm, then dirty-save.
   AppDelegate.appModel is re-wired in the scene's onAppear — App re-inits

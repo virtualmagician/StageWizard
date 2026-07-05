@@ -38,7 +38,9 @@ final class AppModel {
     private(set) var mode: WorkspaceMode = .edit
 
     /// Every editing surface gates on this (Show AND Rehearsal lock).
-    var isShowMode: Bool { mode != .edit }
+    /// True only in SHOW mode — the workspace lock. Rehearsal stays fully
+    /// editable: its whole point is adjusting the show against previews.
+    var isShowMode: Bool { mode == .show }
 
     /// Switch workspace mode. Stops all playback first (cues must re-arm
     /// against the new routing), opens/closes rehearsal previews, and — for

@@ -108,7 +108,7 @@ struct ModeBar: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .frame(width: 230)
-            .help("Show locks editing (⌘E); Rehearsal also routes video into floating preview windows (⌘R). GO, panic, and the Active Cues panel always stay live.")
+            .help("Show locks editing (⌘E). Rehearsal keeps editing and routes video into floating preview windows (⌘R). GO, panic, and the Active Cues panel always stay live.")
 
             switch app.mode {
             case .edit:
@@ -118,7 +118,7 @@ struct ModeBar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .rehearsal:
-                Label("Rehearsal — outputs go to preview windows", systemImage: "rectangle.on.rectangle")
+                Label("Rehearsal — editable; outputs go to preview windows", systemImage: "rectangle.on.rectangle")
                     .font(.caption)
                     .foregroundStyle(Theme.hold)
             }
