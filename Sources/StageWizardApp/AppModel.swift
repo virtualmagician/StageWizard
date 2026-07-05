@@ -212,18 +212,21 @@ final class AppModel {
     /// inspector calls this after every geometry edit so positioning is live.
     func pushGeometry(cueID: UUID) {
         guard let cue = document.cue(withID: cueID) else { return }
-        let settings: (VideoGeometry, FillMode)? = switch cue.body {
-        case .video(let body): (body.geometry, body.fillMode)
-        case .camera(let body): (body.geometry, body.fillMode)
-        case .image(let body): (body.geometry, body.fillMode)
-        case .slide(let body): (body.geometry, body.fillMode)
+        let settings: (VideoGeometry, FillMode, Int)? = switch cue.body {
+        case .video(let body): (body.geometry, body.fillMode, body.layer)
+        case .camera(let body): (body.geometry, body.fillMode, body.layer)
+        case .image(let body): (body.geometry, body.fillMode, body.layer)
+        case .slide(let body): (body.geometry, body.fillMode, body.layer)
         default: nil
         }
-        guard let (geometry, fillMode) = settings else { return }
+        guard let (geometry, fillMode, renderLayer) = settings else { return }
         for instance in transport.registry.instances where instance.cue.id == cueID {
             (instance.player as? VideoCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
             (instance.player as? CameraCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
             (instance.player as? StillCuePlayer)?.applyGeometry(geometry, fillMode: fillMode)
+            (instance.player as? VideoCuePlayer)?.applyRenderLayer(renderLayer)
+            (instance.player as? CameraCuePlayer)?.applyRenderLayer(renderLayer)
+            (instance.player as? StillCuePlayer)?.applyRenderLayer(renderLayer)
         }
     }
 

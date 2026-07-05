@@ -53,7 +53,7 @@ public final class StillCuePlayer: MediaPlayback {
     ) async throws -> StillCuePlayer {
         try StillCuePlayer(
             fillMode: body.fillMode, geometry: body.geometry,
-            fadeInDuration: body.fadeInDuration,
+            fadeInDuration: body.fadeInDuration, renderLayer: body.layer,
             image: try await loadImage(url: imageURL),
             targets: targets, windowFrameOverride: windowFrameOverride
         )
@@ -68,7 +68,7 @@ public final class StillCuePlayer: MediaPlayback {
     ) async throws -> StillCuePlayer {
         try StillCuePlayer(
             fillMode: body.fillMode, geometry: body.geometry,
-            fadeInDuration: body.fadeInDuration,
+            fadeInDuration: body.fadeInDuration, renderLayer: body.layer,
             image: try await loadImage(url: imageURL),
             targets: targets, windowFrameOverride: windowFrameOverride
         )
@@ -91,6 +91,7 @@ public final class StillCuePlayer: MediaPlayback {
         fillMode: FillMode,
         geometry: VideoGeometry,
         fadeInDuration: TimeInterval,
+        renderLayer: Int,
         image: CGImage,
         targets: [OutputTarget],
         windowFrameOverride: CGRect?
@@ -119,6 +120,7 @@ public final class StillCuePlayer: MediaPlayback {
                 CATransaction.setDisableActions(true)
                 layer.frame = host.bounds
                 layer.opacity = 0
+                layer.zPosition = CGFloat(renderLayer)
                 host.addSublayer(layer)
                 CATransaction.commit()
                 built.append(layer)
@@ -224,6 +226,17 @@ public final class StillCuePlayer: MediaPlayback {
         for layer in layers {
             layer.contentsGravity = gravity
             layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
+        }
+        CATransaction.commit()
+    }
+
+    /// Live render-order change from the inspector (1 = back … 10 = front).
+    public func applyRenderLayer(_ value: Int) {
+        guard !stopped else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in layers {
+            layer.zPosition = CGFloat(value)
         }
         CATransaction.commit()
     }

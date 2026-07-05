@@ -15,6 +15,12 @@ struct GeometryTab: View {
         if let cue = document.cue(withID: cueID), let geometry = currentGeometry(cue) {
             HStack(alignment: .top, spacing: 16) {
                 Form {
+                    HStack {
+                        Stepper("Layer: \(currentLayer(cue))", value: layerBinding(cue), in: 1...10)
+                        Text("1 = back · 10 = front")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
                     Picker("Mode", selection: Binding(
                         get: { geometry.mode },
                         set: { newMode in update { $0.mode = newMode } }
@@ -95,6 +101,34 @@ struct GeometryTab: View {
             Text("%")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func currentLayer(_ cue: Cue) -> Int {
+        switch cue.body {
+        case .video(let body): return body.layer
+        case .camera(let body): return body.layer
+        case .image(let body): return body.layer
+        case .slide(let body): return body.layer
+        default: return 5
+        }
+    }
+
+    private func layerBinding(_ cue: Cue) -> Binding<Int> {
+        Binding(
+            get: { currentLayer(document.cue(withID: cueID) ?? cue) },
+            set: { newValue in
+                document.updateCue(cueID) { cue in
+                    switch cue.body {
+                    case .video(var body): body.layer = newValue; cue.body = .video(body)
+                    case .camera(var body): body.layer = newValue; cue.body = .camera(body)
+                    case .image(var body): body.layer = newValue; cue.body = .image(body)
+                    case .slide(var body): body.layer = newValue; cue.body = .slide(body)
+                    default: break
+                    }
+                }
+                app.pushGeometry(cueID: cueID)
+            }
+        )
     }
 
     private func currentGeometry(_ cue: Cue) -> VideoGeometry? {

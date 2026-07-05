@@ -222,6 +222,7 @@ public final class VideoCuePlayer: MediaPlayback {
                 CATransaction.setDisableActions(true)
                 layer.frame = host.bounds
                 layer.opacity = 0
+                layer.zPosition = CGFloat(body.layer)
                 host.addSublayer(layer)
                 CATransaction.commit()
                 layers.append(layer)
@@ -428,6 +429,17 @@ public final class VideoCuePlayer: MediaPlayback {
         CATransaction.setDisableActions(true)
         for layer in playerLayers {
             geometry.apply(to: layer, fillMode: fillMode)
+        }
+        CATransaction.commit()
+    }
+
+    /// Live render-order change from the inspector (1 = back … 10 = front).
+    public func applyRenderLayer(_ value: Int) {
+        guard !stopped else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in playerLayers {
+            layer.zPosition = CGFloat(value)
         }
         CATransaction.commit()
     }

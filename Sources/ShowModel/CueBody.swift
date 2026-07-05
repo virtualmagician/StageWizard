@@ -233,6 +233,9 @@ public struct VideoBody: Codable, Hashable, Sendable {
     public var endBehavior: VideoEndBehavior
     public var fadeInDuration: TimeInterval
     public var fadeOutDuration: TimeInterval
+    /// Render order on the output, 1 (background) … 10 (front).
+    /// Equal layers stack by start order, like before layers existed.
+    public var layer: Int
 
     public init(
         media: MediaReference,
@@ -249,7 +252,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
         geometry: VideoGeometry = .fillStage,
         endBehavior: VideoEndBehavior = .stopAndUnload,
         fadeInDuration: TimeInterval = 0,
-        fadeOutDuration: TimeInterval = 0
+        fadeOutDuration: TimeInterval = 0,
+        layer: Int = 5
     ) {
         self.media = media
         self.startTime = startTime
@@ -266,12 +270,13 @@ public struct VideoBody: Codable, Hashable, Sendable {
         self.endBehavior = endBehavior
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
+        self.layer = layer.clampedToLayerRange
     }
 
     private enum CodingKeys: String, CodingKey {
         case media, startTime, endTime, playCount, infiniteLoop, volumeDB
         case audioDeviceUID, audioDeviceName, display, outputGroupID
-        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration
+        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration, layer
     }
 
     public init(from decoder: Decoder) throws {
@@ -292,7 +297,13 @@ public struct VideoBody: Codable, Hashable, Sendable {
         endBehavior = try c.decode(VideoEndBehavior.self, forKey: .endBehavior)
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
     }
+}
+
+extension Int {
+    /// Render layers live in 1…10.
+    var clampedToLayerRange: Int { Swift.min(Swift.max(self, 1), 10) }
 }
 
 /// Live camera input shown fullscreen on a display. Video-only — sound stays
@@ -310,6 +321,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
     public var geometry: VideoGeometry
     public var fadeInDuration: TimeInterval
     public var fadeOutDuration: TimeInterval
+    /// Render order on the output, 1 (background) … 10 (front).
+    public var layer: Int
 
     public init(
         cameraUID: String? = nil,
@@ -319,7 +332,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
         fillMode: FillMode = .fit,
         geometry: VideoGeometry = .fillStage,
         fadeInDuration: TimeInterval = 0,
-        fadeOutDuration: TimeInterval = 0
+        fadeOutDuration: TimeInterval = 0,
+        layer: Int = 5
     ) {
         self.cameraUID = cameraUID
         self.cameraName = cameraName
@@ -329,11 +343,12 @@ public struct CameraBody: Codable, Hashable, Sendable {
         self.geometry = geometry
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
+        self.layer = layer.clampedToLayerRange
     }
 
     private enum CodingKeys: String, CodingKey {
         case cameraUID, cameraName, display, outputGroupID, fillMode, geometry
-        case fadeInDuration, fadeOutDuration
+        case fadeInDuration, fadeOutDuration, layer
     }
 
     public init(from decoder: Decoder) throws {
@@ -346,6 +361,7 @@ public struct CameraBody: Codable, Hashable, Sendable {
         geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
     }
 }
 
@@ -361,6 +377,8 @@ public struct ImageBody: Codable, Hashable, Sendable {
     public var geometry: VideoGeometry
     public var fadeInDuration: TimeInterval
     public var fadeOutDuration: TimeInterval
+    /// Render order on the output, 1 (background) … 10 (front).
+    public var layer: Int
 
     public init(
         media: MediaReference,
@@ -368,7 +386,8 @@ public struct ImageBody: Codable, Hashable, Sendable {
         fillMode: FillMode = .fit,
         geometry: VideoGeometry = .fillStage,
         fadeInDuration: TimeInterval = 0,
-        fadeOutDuration: TimeInterval = 0
+        fadeOutDuration: TimeInterval = 0,
+        layer: Int = 5
     ) {
         self.media = media
         self.outputGroupID = outputGroupID
@@ -376,10 +395,11 @@ public struct ImageBody: Codable, Hashable, Sendable {
         self.geometry = geometry
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
+        self.layer = layer.clampedToLayerRange
     }
 
     private enum CodingKeys: String, CodingKey {
-        case media, outputGroupID, fillMode, geometry, fadeInDuration, fadeOutDuration
+        case media, outputGroupID, fillMode, geometry, fadeInDuration, fadeOutDuration, layer
     }
 
     public init(from decoder: Decoder) throws {
@@ -390,6 +410,7 @@ public struct ImageBody: Codable, Hashable, Sendable {
         geometry = try c.decodeIfPresent(VideoGeometry.self, forKey: .geometry) ?? .fillStage
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
     }
 }
 
@@ -413,6 +434,8 @@ public struct SlideBody: Codable, Hashable, Sendable {
     public var fadeOutDuration: TimeInterval
     /// Starting this slide fades out other running slides on the same output.
     public var replacesPreviousSlide: Bool
+    /// Render order on the output, 1 (background) … 10 (front).
+    public var layer: Int
 
     public init(
         media: MediaReference,
@@ -424,7 +447,8 @@ public struct SlideBody: Codable, Hashable, Sendable {
         geometry: VideoGeometry = .fillStage,
         fadeInDuration: TimeInterval = 0.15,
         fadeOutDuration: TimeInterval = 0,
-        replacesPreviousSlide: Bool = true
+        replacesPreviousSlide: Bool = true,
+        layer: Int = 5
     ) {
         self.media = media
         self.sourceDeck = sourceDeck
@@ -436,6 +460,7 @@ public struct SlideBody: Codable, Hashable, Sendable {
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
         self.replacesPreviousSlide = replacesPreviousSlide
+        self.layer = layer.clampedToLayerRange
     }
 
     /// Deck display name derived from the source (or the image as fallback).
@@ -446,7 +471,7 @@ public struct SlideBody: Codable, Hashable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case media, sourceDeck, slideIndex, slideCount, outputGroupID
-        case fillMode, geometry, fadeInDuration, fadeOutDuration, replacesPreviousSlide
+        case fillMode, geometry, fadeInDuration, fadeOutDuration, replacesPreviousSlide, layer
     }
 
     public init(from decoder: Decoder) throws {
@@ -461,6 +486,7 @@ public struct SlideBody: Codable, Hashable, Sendable {
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
         replacesPreviousSlide = try c.decodeIfPresent(Bool.self, forKey: .replacesPreviousSlide) ?? true
+        layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
     }
 }
 
