@@ -94,6 +94,11 @@ targets:
       path: Support/CameraExtension.entitlements
       properties:
         com.apple.security.app-sandbox: true
+        # Grants the sandboxed extension the mach namespace for its
+        # CMIOExtensionMachServiceName (same pattern as every shipping
+        # virtual camera) — without it the cmio category validator fails.
+        com.apple.security.application-groups:
+          - Z3U3NKMU2Y.com.marcotempest.stagewizard
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.marcotempest.stagewizard.camera
