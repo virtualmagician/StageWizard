@@ -9,6 +9,10 @@ struct ContentView: View {
         VStack(spacing: 0) {
             GoMasthead()
             Divider()
+            // In flow, right under the transport strip: warnings surface at
+            // the top of the window where the operator is already looking,
+            // and never cover the cue list or the GO button.
+            WarningBanner()
             HSplitView {
                 VSplitView {
                     CueListView()
@@ -27,10 +31,6 @@ struct ContentView: View {
             }
             Divider()
             ModeBar()
-        }
-        .overlay(alignment: .bottomLeading) {
-            // Bottom corner: never covers the GO/PANIC masthead when it matters.
-            WarningBanner()
         }
         .navigationTitle(document.windowTitle)
         .toolbar { toolbarContent }

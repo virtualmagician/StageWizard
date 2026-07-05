@@ -33,6 +33,19 @@ xcodebuild -project StageWizard.xcodeproj -scheme StageWizard \
 rm -rf build/StageWizard.app
 cp -R "$DERIVED/Build/Products/Release/StageWizard.app" build/StageWizard.app
 
+# Sign dev builds with the Developer ID cert when it's present. TCC keys
+# permission grants (camera!) to the signing identity — ad-hoc builds get a
+# fresh identity every compile, so camera access would break on each rebuild
+# and mismatch the notarized copies. Same detection as package.sh.
+DEVID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+if [[ -n "$DEVID" ]]; then
+  xattr -cr build/StageWizard.app
+  codesign --force --deep --options runtime --timestamp \
+    --entitlements Support/StageWizard.entitlements \
+    --sign "$DEVID" build/StageWizard.app
+  echo "Signed with: $DEVID"
+fi
+
 echo ""
 echo "Built: $(pwd)/build/StageWizard.app"
 echo "Install with:  cp -R build/StageWizard.app /Applications/"

@@ -190,8 +190,9 @@ struct WarningBanner: View {
                 .foregroundStyle(.black)
             }
         }
-        .padding(10)
-        .frame(maxWidth: 480)
+        .padding(.horizontal, 14)
+        .padding(.vertical, app.warnings.isEmpty ? 0 : 6)
+        .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.2), value: app.warnings.map(\.id))
     }
 }
