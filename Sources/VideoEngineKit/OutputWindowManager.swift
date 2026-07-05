@@ -145,13 +145,30 @@ public final class OutputWindowManager {
 
     /// Close every preview window (leaving rehearsal mode). Players still
     /// holding leases have been stopped by the mode switch; their later
-    /// releaseLayer calls no-op harmlessly.
-    public func closeAllPreviews() {
+    /// releaseLayer calls no-op harmlessly. Previews in `keeping` survive —
+    /// the virtual-webcam monitor must outlive mode switches while feeding.
+    public func closeAllPreviews(keeping: Set<UUID> = []) {
         for (target, entry) in entries {
-            if case .preview = target {
+            if case .preview(let id, _) = target, !keeping.contains(id) {
                 entry.window.orderOut(nil)
                 entry.window.close()
                 entries[target] = nil
+            }
+        }
+    }
+
+    /// Close one preview: unpin, and close now unless cues still render
+    /// into it (then it closes when the last lease is released).
+    public func closePreview(id: UUID) {
+        for (target, var entry) in entries {
+            guard case .preview(let previewID, _) = target, previewID == id else { continue }
+            entry.pinned = false
+            if entry.leaseCount <= 0 {
+                entry.window.orderOut(nil)
+                entry.window.close()
+                entries[target] = nil
+            } else {
+                entries[target] = entry
             }
         }
     }

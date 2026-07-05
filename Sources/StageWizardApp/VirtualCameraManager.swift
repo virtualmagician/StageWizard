@@ -132,6 +132,7 @@ final class VirtualCameraManager: NSObject {
 
     func stopFeeding() {
         isFeeding = false
+        OutputWindowManager.shared.closePreview(id: Self.monitorPreviewID)
         if let resizeObserver {
             NotificationCenter.default.removeObserver(resizeObserver)
             self.resizeObserver = nil

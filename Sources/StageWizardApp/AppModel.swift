@@ -49,7 +49,9 @@ final class AppModel {
         guard newMode != mode else { return }
         transport.stopAll()
         if mode == .rehearsal {
-            OutputWindowManager.shared.closeAllPreviews()
+            OutputWindowManager.shared.closeAllPreviews(
+                keeping: virtualCamera.isFeeding ? [VirtualCameraManager.monitorPreviewID] : []
+            )
         }
         mode = newMode
         if newMode == .rehearsal {
