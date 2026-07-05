@@ -224,9 +224,35 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
     // SCK only delivers frames when the window CHANGES — a held frame or
     // still image goes silent and the extension would fall back to its
     // splash. Re-send the last frame at 30 fps so the camera never starves.
-    private var lastBuffer: CMSampleBuffer?
+    private var lastPixelBuffer: CVPixelBuffer?
     private var lastEnqueueUptime: UInt64 = 0
     private var repeatTimer: DispatchSourceTimer?
+
+    /// SCK's own sample buffers don't survive the XPC hop into the
+    /// extension (consumeSampleBuffer fails with OSStatus -6 even with a
+    /// full queue) — wrap the IOSurface-backed pixel buffer in a plain,
+    /// freshly-stamped vanilla buffer instead.
+    private func makeVanillaBuffer(from pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
+        var format: CMFormatDescription?
+        CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer, formatDescriptionOut: &format
+        )
+        guard let format else { return nil }
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 30),
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
+        var buffer: CMSampleBuffer?
+        CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescription: format,
+            sampleTiming: &timing,
+            sampleBufferOut: &buffer
+        )
+        return buffer
+    }
 
     /// The extension's fixed device UUID (VirtualCameraIDs.device).
     private static let deviceUID = "7A9EB600-1000-4000-8000-5747697A6172"
@@ -303,24 +329,13 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: 1.0 / 30.0)
         timer.setEventHandler { [weak self] in
-            guard let self, let sinkQueue = self.sinkQueue, let last = self.lastBuffer else { return }
+            guard let self, let sinkQueue = self.sinkQueue, let pixelBuffer = self.lastPixelBuffer else { return }
             let now = DispatchTime.now().uptimeNanoseconds
             guard now - self.lastEnqueueUptime > 100_000_000 else { return }
             guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else { return }
-            var timing = CMSampleTimingInfo(
-                duration: CMTime(value: 1, timescale: 30),
-                presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
-                decodeTimeStamp: .invalid
-            )
-            var copy: CMSampleBuffer?
-            CMSampleBufferCreateCopyWithNewTiming(
-                allocator: kCFAllocatorDefault, sampleBuffer: last,
-                sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-                sampleBufferOut: &copy
-            )
-            if let copy {
+            if let vanilla = self.makeVanillaBuffer(from: pixelBuffer) {
                 self.lastEnqueueUptime = now
-                CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(copy).toOpaque())
+                CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(vanilla).toOpaque())
             }
         }
         timer.resume()
@@ -331,7 +346,7 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
         queue.sync {
             repeatTimer?.cancel()
             repeatTimer = nil
-            lastBuffer = nil
+            lastPixelBuffer = nil
             if deviceID != 0, sinkStreamID != 0 {
                 CMIODeviceStopStream(deviceID, sinkStreamID)
             }
@@ -351,7 +366,8 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
               let statusRaw = attachments.first?[.status] as? Int,
               statusRaw == SCFrameStatus.complete.rawValue else { return }
         completeCount += 1
-        lastBuffer = sampleBuffer
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastPixelBuffer = pixelBuffer
         lastEnqueueUptime = DispatchTime.now().uptimeNanoseconds
         guard CMSimpleQueueGetCount(sinkQueue) < CMSimpleQueueGetCapacity(sinkQueue) else {
             fullCount += 1
@@ -360,7 +376,8 @@ private final class SinkFeed: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             return
         }
-        CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(sampleBuffer).toOpaque())
+        guard let vanilla = makeVanillaBuffer(from: pixelBuffer) else { return }
+        CMSimpleQueueEnqueue(sinkQueue, element: Unmanaged.passRetained(vanilla).toOpaque())
         enqueuedCount += 1
         if enqueuedCount == 1 || enqueuedCount % 150 == 0 {
             log.info("pipeline: received \(self.receivedCount) complete \(self.completeCount) enqueued \(self.enqueuedCount) full \(self.fullCount)")
