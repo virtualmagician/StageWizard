@@ -88,6 +88,14 @@ Tools/package.sh      # everything above + dependency check + sign,
                       # notarize & staple (when credentials are present) + zip
 ```
 
+**Virtual webcam builds:** the camera system extension needs the restricted
+`com.apple.developer.system-extension.install` entitlement, which macOS only
+honors with an embedded **Developer ID provisioning profile** (System
+Extension capability, from the Apple developer portal). Drop it at
+`Support/StageWizard.provisionprofile` and the build scripts embed and sign
+automatically; without it the app builds and runs fine, minus webcam
+activation.
+
 The packaged app is self-contained (system frameworks only). Release zips on
 the [releases page](https://github.com/virtualmagician/StageWizard/releases)
 are Developer ID signed and notarized — download, unzip, double-click.

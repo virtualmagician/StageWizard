@@ -46,8 +46,21 @@ if [[ -n "$DEVID" ]]; then
     codesign --force --options runtime --timestamp \
       --entitlements Support/CameraExtension.entitlements --sign "$DEVID" "$EXT"
   fi
+  # The system-extension install entitlement is RESTRICTED: without an
+  # embedded Developer ID provisioning profile carrying the System Extension
+  # capability, launchd refuses to spawn the app (error 163). Sign with the
+  # full entitlements only when the profile is present; otherwise the app
+  # ships without virtual-webcam activation (everything else works).
+  APP_ENTITLEMENTS="Support/StageWizard.entitlements"
+  if [[ -f "Support/StageWizard.provisionprofile" ]]; then
+    cp "Support/StageWizard.provisionprofile" "$APP/Contents/embedded.provisionprofile"
+    APP_ENTITLEMENTS="Support/StageWizardSigning.entitlements"
+    echo "Embedded provisioning profile — virtual webcam activation enabled."
+  else
+    echo "No Support/StageWizard.provisionprofile — signing without the system-extension entitlement (virtual webcam activation disabled)."
+  fi
   codesign --force --options runtime --timestamp \
-    --entitlements Support/StageWizardSigning.entitlements --sign "$DEVID" "$APP"
+    --entitlements "$APP_ENTITLEMENTS" --sign "$DEVID" "$APP"
   codesign --verify --strict --deep "$APP"
 
   if xcrun notarytool history --keychain-profile stagewizard-notary >/dev/null 2>&1; then

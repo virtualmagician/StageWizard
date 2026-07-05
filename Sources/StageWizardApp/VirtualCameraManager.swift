@@ -180,7 +180,14 @@ extension VirtualCameraManager: OSSystemExtensionRequestDelegate {
 
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
         Task { @MainActor in
-            self.status = .failed(error.localizedDescription)
+            // Code 1 = missing/unvalidated entitlement — the build was
+            // signed without the provisioning profile (see CLAUDE.md).
+            if (error as NSError).domain == OSSystemExtensionErrorDomain,
+               (error as NSError).code == OSSystemExtensionError.missingEntitlement.rawValue {
+                self.status = .failed("this build lacks the system-extension entitlement — a Developer ID provisioning profile is required (see README)")
+            } else {
+                self.status = .failed(error.localizedDescription)
+            }
         }
     }
 }

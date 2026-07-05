@@ -118,9 +118,13 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   (OutputTarget.preview id 2222…), ScreenCaptureKit streams that window at
   1080p30 into the sink (VirtualCameraManager). Needs Screen Recording TCC.
 - The restricted `com.apple.developer.system-extension.install` entitlement
-  lives ONLY in Support/StageWizardSigning.entitlements (used by the re-sign
-  scripts) — putting it in project.yml makes Xcode demand a provisioning
-  profile. Scripts sign INSIDE-OUT: extension (its own entitlements) → app.
+  lives ONLY in Support/StageWizardSigning.entitlements — AND may only be
+  signed in when `Support/StageWizard.provisionprofile` (a Developer ID
+  provisioning profile with the System Extension capability, from the Apple
+  developer portal) is present to embed; otherwise launchd REFUSES TO SPAWN
+  the app (error 163). The scripts handle this automatically and fall back
+  to the unrestricted entitlements. Scripts sign INSIDE-OUT: extension (its
+  own entitlements) → app.
 - Activation needs the app in /Applications + one-time user approval; the
   extension's mach service name is hardcoded team-prefixed in project.yml.
 
