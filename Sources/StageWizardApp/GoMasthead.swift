@@ -136,7 +136,7 @@ struct GoMasthead: View {
             } label: {
                 Label("Stop All", systemImage: "stop.fill")
             }
-            .help("Hard-stop everything immediately")
+            .help("Hard stop everything (no fade)")
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.bordered)
@@ -147,12 +147,12 @@ struct GoMasthead: View {
         Button {
             app.transport.panic()
         } label: {
-            Text(app.transport.isPanicking ? "PANIC!" : "PANIC")
+            Text(app.transport.isPanicking ? "STOPPING!" : "STOP ALL")
                 .font(.system(size: 14, weight: .heavy))
                 .frame(width: 150, height: 30)
         }
         .buttonStyle(.borderedProminent)
-        .tint(app.transport.isPanicking ? .red : Theme.panic)
+        .tint(app.transport.isPanicking ? .red : Theme.go)
         .help("Fade everything out (Esc). Press twice for an immediate hard stop.")
     }
 }

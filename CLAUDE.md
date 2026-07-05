@@ -129,6 +129,28 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   own entitlements) → app.
 - Activation needs the app in /Applications + one-time user approval; the
   extension's mach service name is hardcoded team-prefixed in project.yml.
+- HARD-WON extension lessons (each cost a debugging round):
+  * sysextd requires the extension bundle NAMED by its bundle id
+    (<id>.systemextension), CFBundlePackageType SYSX, an
+    NSSystemExtensionUsageDescription, and a team-prefixed app-group
+    entitlement for the mach service namespace.
+  * Every NEW extension version must be NOTARIZED or activation fails with
+    "code signature invalid" — extension changes go through package.sh;
+    app-only changes can use build.sh (no re-activation needed).
+  * SCK sample buffers do NOT survive the CMIO XPC hop (consumeSampleBuffer
+    fails, OSStatus -6) — the app repackages each frame's IOSurface pixel
+    buffer via CMSampleBufferCreateReadyWithImageBuffer.
+  * The extension's consume-retry must never dispatch back onto stateQueue
+    (consumeBuffer syncs on it → self-deadlock → process killed → respawn
+    with no sink client; app-side queue jams full silently).
+  * SCK is change-driven → app repeat-sends the last frame at 30 fps; window
+    capture needs scalesToFit + a sourceRect crop excluding the title bar
+    (tracked across resizes); preview panels have hidesOnDeactivate=false so
+    backgrounding the app doesn't starve the camera.
+  * Feed diagnostics: /usr/bin/log show --info --predicate
+    'subsystem == "com.marcotempest.stagewizard"' (or .camera for the
+    extension). FULL PATH — plain `log` is shadowed by a shell alias here;
+    --info is required (Logger .info is memory-only by default).
 
 ## Release / credentials (machine-local, no secrets in repo)
 

@@ -14,7 +14,7 @@ struct InspectorView: View {
         case timeline = "Timeline"
         case geometry = "Geometry"
         case output = "Output"
-        case triggers = "Triggers"
+        case triggers = "Shortcut"
 
         /// Tabs relevant to each cue type (groups get Timeline).
         static func available(for body: CueBody) -> [Tab] {
@@ -111,7 +111,7 @@ private struct BasicsTab: View {
                     ColorTagPicker(cueID: cueID)
                 }
                 Divider()
-                TimecodeField(label: "Pre-Wait", value: Binding(
+                TimecodeField(label: "Pre-Cue", value: Binding(
                     get: { cue.preWait },
                     set: { v in document.updateCue(cueID) { $0.preWait = v } }
                 ))
@@ -267,7 +267,7 @@ private struct FollowPicker: View {
                 .frame(width: 260)
 
                 if case .autoContinue(let postWait) = cue.follow {
-                    TimecodeField(label: "Post-Wait", value: Binding(
+                    TimecodeField(label: "Post-Cue", value: Binding(
                         get: { postWait },
                         set: { v in document.updateCue(cueID) { $0.follow = .autoContinue(postWait: v) } }
                     ))
@@ -281,7 +281,7 @@ private struct ColorTagPicker: View {
     @Environment(ShowDocumentController.self) private var document
     let cueID: UUID
 
-    private static let tags: [String?] = [nil, "red", "orange", "yellow", "green", "blue", "purple"]
+    private static let tags: [String?] = [nil, "red", "crimson", "rose", "sky", "steel", "navy"]
 
     var body: some View {
         HStack(spacing: 6) {
@@ -289,9 +289,9 @@ private struct ColorTagPicker: View {
                 Button {
                     document.updateCue(cueID) { $0.colorTag = tag }
                 } label: {
-                    Circle()
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(tagColor(tag) ?? Color(.windowBackgroundColor))
-                        .overlay(Circle().strokeBorder(.quaternary, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(.quaternary, lineWidth: 1))
                         .overlay {
                             if document.cue(withID: cueID)?.colorTag == tag {
                                 Image(systemName: "checkmark")

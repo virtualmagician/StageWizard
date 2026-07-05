@@ -239,9 +239,9 @@ struct CueListView: View {
             Text("№").frame(width: 56, alignment: .leading)
             Text("Name").frame(maxWidth: .infinity, alignment: .leading)
             Text("Target").frame(width: 52, alignment: .trailing)
-            Text("Pre-Wait").frame(width: 74, alignment: .trailing)
+            Text("Pre-Cue").frame(width: 74, alignment: .trailing)
             Text("Duration").frame(width: 80, alignment: .trailing)
-            Text("Post-Wait").frame(width: 74, alignment: .trailing)
+            Text("Post-Cue").frame(width: 74, alignment: .trailing)
             Text("").frame(width: 30)                        // follow badge
         }
         .font(.caption.weight(.semibold))
@@ -509,14 +509,16 @@ func typeSymbol(_ body: CueBody) -> String {
     }
 }
 
+/// Blue + red palette; legacy tag ids from older shows map to the nearest
+/// new tone (stored strings must keep decoding — never break old files).
 func tagColor(_ tag: String?) -> Color? {
     switch tag {
-    case "red": return .red
-    case "orange": return .orange
-    case "yellow": return .yellow
-    case "green": return .green
-    case "blue": return .blue
-    case "purple": return .purple
+    case "red": return Color(red: 0.92, green: 0.28, blue: 0.25)
+    case "crimson": return Color(red: 0.72, green: 0.12, blue: 0.28)
+    case "rose", "orange", "yellow": return Color(red: 0.95, green: 0.55, blue: 0.55)
+    case "sky", "green": return Color(red: 0.55, green: 0.75, blue: 0.90)
+    case "steel", "blue": return Theme.accent
+    case "navy", "purple": return Color(red: 0.25, green: 0.38, blue: 0.55)
     default: return nil
     }
 }

@@ -102,8 +102,8 @@ struct ModeBar: View {
                 set: { app.setMode($0) }
             )) {
                 Text("Edit").tag(WorkspaceMode.edit)
-                Text("Show").tag(WorkspaceMode.show)
                 Text("Rehearsal").tag(WorkspaceMode.rehearsal)
+                Text("Show").tag(WorkspaceMode.show)
             }
             .pickerStyle(.segmented)
             .labelsHidden()

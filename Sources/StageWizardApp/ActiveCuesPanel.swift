@@ -9,7 +9,7 @@ struct ActiveCuesPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Active Cues")
+                Text("In Progress")
                     .font(.headline)
                 Spacer()
                 if !app.transport.registry.isEmpty {
@@ -27,7 +27,7 @@ struct ActiveCuesPanel: View {
 
             if app.transport.registry.isEmpty {
                 Spacer()
-                Text("No active cues")
+                Text("Nothing in progress")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                 Spacer()
@@ -118,7 +118,7 @@ private struct ActiveCueRow: View {
         case .preWait:
             Label("wait", systemImage: "clock").font(.caption2)
         case .running:
-            Label("playing", systemImage: "play.fill").font(.caption2).foregroundStyle(.green)
+            Label("playing", systemImage: "play.fill").font(.caption2).foregroundStyle(Theme.accent)
         case .holding:
             Label("hold", systemImage: "pause.rectangle").font(.caption2).foregroundStyle(.blue)
         case .paused:
@@ -136,7 +136,7 @@ private struct ActiveCueRow: View {
         switch instance.state {
         case .paused: return .yellow
         case .fadingOut: return .orange
-        default: return .green
+        default: return Theme.accent
         }
     }
 
@@ -145,7 +145,7 @@ private struct ActiveCueRow: View {
         case .paused: return .yellow.opacity(0.12)
         case .fadingOut: return .orange.opacity(0.12)
         case .error: return .red.opacity(0.15)
-        default: return .green.opacity(0.10)
+        default: return Theme.accent.opacity(0.10)
         }
     }
 }

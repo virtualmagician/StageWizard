@@ -23,5 +23,5 @@ enum Theme {
     static let panic = Color(red: 0.90, green: 0.30, blue: 0.20)
     static let hold = accent
 
-    static let standbyBorder = standby.opacity(0.8)
+    static let standbyBorder = accent.opacity(0.8)
 }
