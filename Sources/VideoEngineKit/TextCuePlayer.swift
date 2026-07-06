@@ -1,10 +1,10 @@
 import AppKit
 import QuartzCore
 
-/// Rich text on stage outputs. The RTF is rendered to a bitmap at each
-/// target's current size (re-rendered on edits and preview resizes), shown
-/// on a CALayer with the same fade/geometry/z-order behavior as stills.
-/// Indefinite like a camera cue: holds until stopped.
+/// Rich text on stage outputs. The RTF renders once onto a fixed
+/// 1920×1080 reference canvas (the editor's authoring space, text inside
+/// its bounding box) and aspect-fit scales to every target — editor and
+/// outputs are pixel-identical at any size. Indefinite: holds until stopped.
 @MainActor
 public final class TextCuePlayer: MediaPlayback {
     public let targets: [OutputTarget]
@@ -39,14 +39,16 @@ public final class TextCuePlayer: MediaPlayback {
                 let host = try OutputWindowManager.shared.hostLayer(for: target, frameOverride: windowFrameOverride)
                 leased.append(target)
                 let layer = CALayer()
-                layer.contentsGravity = .resize   // canvas is rendered at stage size
+                // The canvas is a FIXED 1920×1080 reference (what the editor
+                // shows); aspect-fit scaling makes every output — full
+                // display or tiny preview — render the same picture.
+                layer.contentsGravity = .resizeAspect
                 layer.isOpaque = false
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 layer.frame = host.bounds
                 layer.opacity = 0
                 layer.zPosition = CGFloat(body.layer)
-                layer.contents = Self.render(body: body, size: host.bounds.size)
                 host.addSublayer(layer)
                 CATransaction.commit()
                 built.append(layer)
@@ -57,23 +59,32 @@ public final class TextCuePlayer: MediaPlayback {
             throw error
         }
         self.layers = built
+        let rendered = Self.render(body: body)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in built { layer.contents = rendered }
+        CATransaction.commit()
         applyGeometry(body.geometry, fillMode: .stretch)
     }
 
     // MARK: - Rendering
 
-    /// RTF → bitmap at 2× the stage size (crisp on Retina outputs). Text is
-    /// drawn full-width (its own paragraph alignment applies) and centered
-    /// vertically; background fills the whole canvas or stays transparent.
-    static func render(body: TextBody, size: CGSize) -> CGImage? {
-        guard size.width >= 1, size.height >= 1 else { return nil }
+    /// The authoring space: every text cue is designed and rendered on this
+    /// canvas, then aspect-fit scaled to the actual output.
+    public static let referenceSize = CGSize(width: 1920, height: 1080)
+
+    /// RTF → bitmap on the 2×-supersampled reference canvas. The text lives
+    /// inside its bounding box (normalized stage rect): wrapped to the box
+    /// width, vertically centered within it, clipped to it. Background
+    /// fills the whole canvas or stays transparent.
+    static func render(body: TextBody) -> CGImage? {
         guard let attributed = NSAttributedString(rtf: body.rtf, documentAttributes: nil) else { return nil }
 
+        let size = referenceSize
         let scale: CGFloat = 2
-        let pixelSize = CGSize(width: size.width * scale, height: size.height * scale)
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
-            pixelsWide: Int(pixelSize.width), pixelsHigh: Int(pixelSize.height),
+            pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
         ) else { return nil }
@@ -88,35 +99,44 @@ public final class TextCuePlayer: MediaPlayback {
             NSRect(origin: .zero, size: size).fill()
         }
 
-        // Side margins of 4% keep text off the physical screen edge.
-        let inset = size.width * 0.04
-        let textWidth = size.width - inset * 2
+        let boxRect = NSRect(
+            x: body.box.x * size.width,
+            y: body.box.y * size.height,
+            width: body.box.width * size.width,
+            height: body.box.height * size.height
+        )
         let bounding = attributed.boundingRect(
-            with: NSSize(width: textWidth, height: .greatestFiniteMagnitude),
+            with: NSSize(width: boxRect.width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
-        let origin = NSPoint(x: inset, y: max(0, (size.height - bounding.height) / 2))
+        NSBezierPath(rect: boxRect).addClip()   // overflow stays inside the box
+        let origin = NSPoint(
+            x: boxRect.minX,
+            y: boxRect.minY + max(0, (boxRect.height - bounding.height) / 2)
+        )
         attributed.draw(
-            with: NSRect(origin: origin, size: NSSize(width: textWidth, height: min(bounding.height, size.height))),
+            with: NSRect(origin: origin, size: NSSize(width: boxRect.width, height: min(bounding.height, boxRect.height))),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
         return rep.cgImage
     }
 
-    /// Live content/background change from the inspector.
+    /// Live content/background/box change from the inspector — one render,
+    /// shared by every target layer.
     public func applyText(_ newBody: TextBody) {
         guard !stopped else { return }
         body = newBody
+        let rendered = Self.render(body: newBody)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for layer in layers {
-            layer.contents = Self.render(body: newBody, size: layer.bounds.size)
+            layer.contents = rendered
         }
         CATransaction.commit()
     }
 
-    /// Geometry push doubles as the resize hook: preview-window resizes
-    /// re-push geometry app-wide, so re-render at the new canvas size here.
+    /// The reference canvas scales with the layer — geometry pushes only
+    /// need the transform (no re-render on window resizes).
     public func applyGeometry(_ geometry: VideoGeometry, fillMode: FillMode) {
         guard !stopped else { return }
         body.geometry = geometry
@@ -124,7 +144,6 @@ public final class TextCuePlayer: MediaPlayback {
         CATransaction.setDisableActions(true)
         for layer in layers {
             layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
-            layer.contents = Self.render(body: body, size: layer.bounds.size)
         }
         CATransaction.commit()
     }

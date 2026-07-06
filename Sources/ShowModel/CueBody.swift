@@ -490,6 +490,25 @@ public struct RGBAColor: Codable, Hashable, Sendable {
     }
 }
 
+/// A rectangle in normalized stage coordinates (0…1 fractions of the
+/// stage, origin bottom-left — same space as layer coordinates).
+public struct StageRect: Codable, Hashable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    /// Reproduces the pre-box text layout: full height, 4% side margins.
+    public static let textDefault = StageRect(x: 0.04, y: 0, width: 0.92, height: 1)
+}
+
 /// Rich text on stage outputs — titles, lower thirds, prompter notes.
 /// Content is RTF (pasted formatting survives); rendered to a bitmap at the
 /// stage's size at arm/edit time. Indefinite: holds until stopped.
@@ -508,6 +527,8 @@ public struct TextBody: Codable, Hashable, Sendable {
     public var fadeOutDuration: TimeInterval
     /// Render order on the output, 1 (background) … 10 (front).
     public var layer: Int
+    /// Where the text block lives on the 16:9 stage (normalized).
+    public var box: StageRect
 
     public init(
         rtf: Data,
@@ -517,7 +538,8 @@ public struct TextBody: Codable, Hashable, Sendable {
         geometry: VideoGeometry = .fillStage,
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
-        layer: Int = 5
+        layer: Int = 5,
+        box: StageRect = .textDefault
     ) {
         self.rtf = rtf
         self.plainPreview = plainPreview
@@ -527,11 +549,12 @@ public struct TextBody: Codable, Hashable, Sendable {
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
         self.layer = layer.clampedToLayerRange
+        self.box = box
     }
 
     private enum CodingKeys: String, CodingKey {
         case rtf, plainPreview, backgroundColor, outputGroupID, geometry
-        case fadeInDuration, fadeOutDuration, layer
+        case fadeInDuration, fadeOutDuration, layer, box
     }
 
     public init(from decoder: Decoder) throws {
@@ -544,6 +567,7 @@ public struct TextBody: Codable, Hashable, Sendable {
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
         layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
+        box = try c.decodeIfPresent(StageRect.self, forKey: .box) ?? .textDefault
     }
 }
 

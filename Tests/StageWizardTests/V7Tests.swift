@@ -209,14 +209,26 @@ final class V7Tests: XCTestCase {
         XCTAssertNil(decoded.backgroundColor)
     }
 
-    func testTextRenderProducesCanvasSizedImage() {
+    func testTextRenderUsesTheReferenceCanvas() {
         var body = TextBody(rtf: makeRTF("Hello"))
         body.backgroundColor = RGBAColor(red: 1, green: 0, blue: 0)
-        let image = TextCuePlayer.render(body: body, size: CGSize(width: 400, height: 300))
+        let image = TextCuePlayer.render(body: body)
         XCTAssertNotNil(image)
-        // 2x supersampled for Retina outputs.
-        XCTAssertEqual(image?.width, 800)
-        XCTAssertEqual(image?.height, 600)
+        // Fixed 1920×1080 authoring canvas, 2x supersampled.
+        XCTAssertEqual(image?.width, 3840)
+        XCTAssertEqual(image?.height, 2160)
+    }
+
+    func testTextBoxRoundTripsAndDefaultsToLegacyLayout() throws {
+        var body = TextBody(rtf: makeRTF("x"))
+        body.box = StageRect(x: 0.1, y: 0.2, width: 0.5, height: 0.3)
+        let decoded = try JSONDecoder().decode(TextBody.self, from: JSONEncoder().encode(body))
+        XCTAssertEqual(decoded.box.width, 0.5)
+        // Older files without the key land on the pre-box layout.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as! [String: Any]
+        json.removeValue(forKey: "box")
+        let old = try JSONDecoder().decode(TextBody.self, from: try JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(old.box, .textDefault)
     }
 
     func testTextPlayerArmsStartsAndStopsOnPreviewTarget() async throws {
