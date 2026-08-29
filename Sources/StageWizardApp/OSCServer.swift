@@ -80,7 +80,16 @@ final class OSCServer {
 
         newListener.stateUpdateHandler = { @Sendable [weak self] state in
             Task { @MainActor in
-                self?.handleListenerState(state)
+                // A restart (stop() then start()) can leave the OLD
+                // listener's stateUpdateHandler with a late .cancelled/
+                // .failed still in flight when the new listener is already
+                // up — without this identity check that stale callback would
+                // corrupt the NEW listener's isRunning, or even stop() it via
+                // the .failed branch. `listener?.stateUpdateHandler = nil` in
+                // stop() closes most of this window, but the check stays as
+                // the actual guarantee.
+                guard let self, self.listener === newListener else { return }
+                self.handleListenerState(state)
             }
         }
         newListener.newConnectionHandler = { @Sendable [weak self] connection in
@@ -98,6 +107,7 @@ final class OSCServer {
             connection.cancel()
         }
         connections.removeAll()
+        listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
         isRunning = false
@@ -120,7 +130,16 @@ final class OSCServer {
         }
     }
 
+    /// Cap on concurrently tracked UDP flows — hostile-input hardening. No
+    /// idle timer is needed (unlike the web remote's TCP connections): UDP
+    /// flows are cheap, so the cap alone is the guard against unbounded growth.
+    private static let maxTrackedFlows = 64
+
     private func accept(_ connection: NWConnection) {
+        guard connections.count < Self.maxTrackedFlows else {
+            connection.cancel()
+            return
+        }
         let key = ObjectIdentifier(connection)
         connections[key] = connection
         connection.stateUpdateHandler = { @Sendable [weak self] state in
@@ -175,7 +194,7 @@ final class OSCServer {
     /// spam the operator.
     nonisolated static func parse(_ data: Data) -> [OSCMessage] {
         if data.starts(with: bundleTag) {
-            return parseBundle(data)
+            return parseBundle(data, depth: 0)
         }
         if let message = parseMessage(data) {
             return [message]
@@ -184,6 +203,11 @@ final class OSCServer {
     }
 
     nonisolated private static let bundleTag = Data("#bundle\0".utf8)
+    /// Recursion cap for nested #bundle elements — a crafted datagram with
+    /// deeply nested bundles could otherwise blow the worker (background
+    /// queue) stack. Beyond this depth, parsing that branch aborts silently
+    /// (returns []) rather than crashing.
+    nonisolated private static let maxBundleDepth = 8
 
     /// One OSC message: an address pattern, then a type-tag string, then one
     /// argument per tag. An unrecognized type tag aborts parsing of the
@@ -223,7 +247,8 @@ final class OSCServer {
     /// (ignored — StageWizard fires everything immediately), then a
     /// sequence of 4-byte-size-prefixed elements, each itself a message or
     /// a nested bundle.
-    nonisolated private static func parseBundle(_ data: Data) -> [OSCMessage] {
+    nonisolated private static func parseBundle(_ data: Data, depth: Int) -> [OSCMessage] {
+        guard depth <= maxBundleDepth else { return [] }
         let headerSize = 16
         guard data.count >= headerSize else { return [] }
 
@@ -235,7 +260,7 @@ final class OSCServer {
             guard elementEnd <= data.endIndex else { break }
             let element = data.subdata(in: afterSize..<elementEnd)
             if element.starts(with: bundleTag) {
-                result.append(contentsOf: parseBundle(element))
+                result.append(contentsOf: parseBundle(element, depth: depth + 1))
             } else if let message = parseMessage(element) {
                 result.append(message)
             }

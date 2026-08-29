@@ -89,4 +89,50 @@ final class UndoTests: XCTestCase {
         document.undo()
         XCTAssertTrue(fired, "restore notifies so the transport can revalidate")
     }
+
+    func testSaveBreaksCoalescingSoPostSaveEditIsNeverLostToRedo() async throws {
+        // Regression for: a save landing mid-coalesce-burst left
+        // savePointDepth == undoStack.count, so an edit arriving right after
+        // (still inside the 500ms coalesce window) folded into the entry
+        // that now anchored the save point instead of appending — leaving
+        // undo depth == savePointDepth despite the unsaved edit, which made
+        // a later redo report isDirty == false with real changes on screen.
+        let document = ShowDocumentController()
+        let cue = addCue(document, number: "10")
+        XCTAssertEqual(document.undoDepthForTesting, 1)
+
+        // `markSaved()` is exactly what `write(to:)` calls on a successful
+        // save — exercised directly so the test doesn't need NSSavePanel or
+        // real disk I/O.
+        document.markSaved()
+        XCTAssertFalse(document.isDirty)
+        let depthAtSave = document.undoDepthForTesting
+
+        // An edit landing well inside the coalesce window, immediately after
+        // the simulated save.
+        document.updateCue(cue.id) { $0.preWait = 5 }
+
+        XCTAssertGreaterThan(
+            document.undoDepthForTesting, depthAtSave,
+            "a post-save edit must append a fresh undo entry, never coalesce into the save point"
+        )
+        XCTAssertTrue(document.isDirty)
+    }
+
+    func testRevalidateClearsPlayheadWhenCueLeavesTheGOSequence() {
+        let app = AppModel()
+        let group = Cue(number: "1", body: .group(GroupBody(mode: .fireAll)))
+        let cue = Cue(number: "2", body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/1.wav"))))
+        app.document.mutate { $0.cues = [group, cue] }
+        app.transport.setPlayhead(cue.id)
+        XCTAssertEqual(app.transport.standingByCue?.id, cue.id)
+
+        // An undone edit can keep the cue but move it inside a fire-all
+        // group: it still EXISTS, yet is no longer a GO position — bare
+        // existence checking would leave GO silently dead here.
+        app.document.mutate { $0.cues[1].parentID = group.id }
+        app.transport.revalidatePlayhead()
+        XCTAssertEqual(app.transport.standingByCue?.id, group.id,
+                       "playhead cleared, GO falls back to the first GO-able cue")
+    }
 }

@@ -235,6 +235,34 @@ final class WebRemoteTests: XCTestCase {
         XCTAssertEqual(decoded.settings.webRemotePort, 1024)
     }
 
+    /// FIX 6 regression: a port value that doesn't even fit UInt16 (e.g. a
+    /// crafted or corrupted 70000) must fall back to the default, not throw
+    /// and refuse to open the whole show file — decodeIfPresent(UInt16.self,
+    /// …) validates range fit BEFORE the `if let` can catch it and would
+    /// propagate a DecodingError straight out of ShowFile.load.
+    func testWebRemotePortAboveUInt16RangeDecodesToDefaultWithoutThrowing() throws {
+        let show = ShowFile()
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["webRemotePort"] = 70000
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertEqual(decoded.settings.webRemotePort, 53200, "an out-of-UInt16-range port must decode to the default, not throw")
+    }
+
+    /// Same failure mode, negative side.
+    func testWebRemotePortNegativeDecodesToDefaultWithoutThrowing() throws {
+        let show = ShowFile()
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["webRemotePort"] = -5
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertEqual(decoded.settings.webRemotePort, 53200, "a negative port must decode to the default, not throw")
+    }
+
     // MARK: - Embedded page sanity
 
     func testEmbeddedPageContainsExpectedRoutesAndNoExternalReferences() {

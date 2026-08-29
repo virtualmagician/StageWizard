@@ -11,11 +11,30 @@ import XCTest
 @MainActor
 final class RateTests: XCTestCase {
 
-    private static let toneURL = URL(fileURLWithPath:
-        "/Users/marcotempest/Library/CloudStorage/Dropbox-Newmagic/Marco Tempest/StageWizard/TestMedia/tone-440-10s.wav")
-    private static let identURL = URL(fileURLWithPath:
-        "/Users/marcotempest/Library/CloudStorage/Dropbox-Newmagic/Marco Tempest/StageWizard/TestMedia/ident-5s.mov")
+    /// Derived from this source file's own path, not hardcoded, so the suite
+    /// works from any clone (this repo is public) —
+    /// Tests/StageWizardTests/RateTests.swift → repo root → TestMedia/.
+    private static let mediaDir: URL = {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // RateTests.swift -> StageWizardTests/
+            .deletingLastPathComponent()   // -> Tests/
+            .deletingLastPathComponent()   // -> repo root
+            .appendingPathComponent("TestMedia")
+    }()
+    private static let toneURL = mediaDir.appendingPathComponent("tone-440-10s.wav")
+    private static let identURL = mediaDir.appendingPathComponent("ident-5s.mov")
     private static let smallFrame = CGRect(x: 60, y: 60, width: 320, height: 180)
+
+    /// Guards the three engine-backed tests below that need real generated
+    /// media — mirrors IntegrationTests' skip message. Everything else in
+    /// this suite (round-trips, clamping, DurationCache math) needs no media
+    /// and always runs.
+    private func skipIfTestMediaMissing() throws {
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: Self.toneURL.path),
+            "TestMedia missing — run: swift Tools/make-test-media.swift TestMedia"
+        )
+    }
 
     // MARK: - AudioBody.rate
 
@@ -105,6 +124,7 @@ final class RateTests: XCTestCase {
     // MARK: - Engines: duration is reported wall-clock (instant, no waiting)
 
     func testAudioCuePlayerReportsWallClockDurationAtDoubleRate() async throws {
+        try skipIfTestMediaMissing()
         let body = AudioBody(
             media: MediaReference(absolutePath: Self.toneURL.path),
             startTime: 0, endTime: 2.0,
@@ -117,6 +137,7 @@ final class RateTests: XCTestCase {
     }
 
     func testVideoCuePlayerReportsWallClockDurationAtDoubleRate() async throws {
+        try skipIfTestMediaMissing()
         let body = VideoBody(
             media: MediaReference(absolutePath: Self.identURL.path),
             startTime: 1.0, endTime: 2.0,
@@ -134,6 +155,7 @@ final class RateTests: XCTestCase {
     // MARK: - Engine: rate actually changes real playback speed end-to-end
 
     func testAudioCuePlayerAtDoubleRateFinishesInHalfWallClockTime() async throws {
+        try skipIfTestMediaMissing()
         let body = AudioBody(
             media: MediaReference(absolutePath: Self.toneURL.path),
             startTime: 0, endTime: 2.0,

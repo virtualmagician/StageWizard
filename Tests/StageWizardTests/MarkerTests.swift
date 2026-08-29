@@ -144,6 +144,32 @@ final class MarkerTests: XCTestCase {
         XCTAssertNil(provider.players[b.id], "an unresolved marker id must not arm any follow")
     }
 
+    /// A marker past the trimmed OUT point would fire its follow after the
+    /// cue already ended (playback never reaches it). Per spec this must
+    /// NOT arm a follow at all — same silent no-arm as a deleted marker, no
+    /// clamping to the out-point.
+    func testMarkerBeyondOutTrimNeverArmsFollow() async {
+        let markerID = UUID()
+        let marker = CueMarker(id: markerID, time: 4, name: "Past the trim")
+        let a = Cue(
+            number: "1",
+            follow: .autoContinueAtMarker(markerID: markerID),
+            body: .audio(AudioBody(
+                media: MediaReference(absolutePath: "/fake/1.wav"),
+                endTime: 3,   // trims the cue's playable range to [0, 3]
+                markers: [marker]
+            ))
+        )
+        provider.durations[a.id] = 0.2
+        let b = Cue(number: "2", body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/2.wav"))))
+        provider.durations[b.id] = 0.2
+        show.cues = [a, b]
+
+        transport.go()
+        await wait(0.5)
+        XCTAssertNil(provider.players[b.id], "a marker past the OUT trim must not arm any follow")
+    }
+
     func testStopAllCancelsPendingMarkerFollow() async {
         let markerID = UUID()
         let marker = CueMarker(id: markerID, time: 2, name: "Drop")

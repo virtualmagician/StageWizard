@@ -140,6 +140,35 @@ final class OSCTests: XCTestCase {
         XCTAssertTrue(OSCServer.parse(bundle).isEmpty)
     }
 
+    /// Wraps `payload` in `depth` nested `#bundle` layers — depth 1 is a
+    /// single bundle directly containing `payload`; depth 2 is a bundle
+    /// containing a bundle containing `payload`; and so on.
+    private func nestedBundles(around payload: Data, depth: Int) -> Data {
+        var wrapped = payload
+        for _ in 0..<depth {
+            wrapped = oscBundle(elements: [wrapped])
+        }
+        return wrapped
+    }
+
+    /// FIX 9: recursion depth cap. A modest nesting depth (well under the
+    /// cap) must still parse normally.
+    func testModeratelyNestedBundleStillParses() {
+        let go = oscMessage(address: "/stagewizard/go", typeTags: "")
+        let data = nestedBundles(around: go, depth: 2)   // bundle -> bundle -> message
+        XCTAssertEqual(OSCServer.parse(data), [OSCMessage(address: "/stagewizard/go", arguments: [])])
+    }
+
+    /// FIX 9: a datagram nesting `#bundle` well past the recursion cap must
+    /// not crash the worker (background) queue — parsing that branch aborts
+    /// silently once the cap is exceeded, so the deeply buried message is
+    /// simply never reached.
+    func testDeeplyNestedBundleAbortsWithoutCrashing() {
+        let go = oscMessage(address: "/stagewizard/go", typeTags: "")
+        let data = nestedBundles(around: go, depth: 16)
+        XCTAssertEqual(OSCServer.parse(data), [], "nesting past the recursion cap must abort that branch, not fire the buried message")
+    }
+
     // MARK: - Router table: OSCServer.command(for:)
 
     func testCommandForEveryMappedAddress() {
@@ -222,6 +251,34 @@ final class OSCTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: json)
         let decoded = try ShowFile.load(from: data)
         XCTAssertEqual(decoded.settings.oscPort, 1024)
+    }
+
+    /// FIX 6 regression: a port value that doesn't even fit UInt16 (e.g. a
+    /// crafted or corrupted 70000) must fall back to the default, not throw
+    /// and refuse to open the whole show file — decodeIfPresent(UInt16.self,
+    /// …) validates range fit BEFORE the `if let` can catch it and would
+    /// propagate a DecodingError straight out of ShowFile.load.
+    func testOSCPortAboveUInt16RangeDecodesToDefaultWithoutThrowing() throws {
+        let show = ShowFile()
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["oscPort"] = 70000
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertEqual(decoded.settings.oscPort, 53100, "an out-of-UInt16-range port must decode to the default, not throw")
+    }
+
+    /// Same failure mode, negative side.
+    func testOSCPortNegativeDecodesToDefaultWithoutThrowing() throws {
+        let show = ShowFile()
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["oscPort"] = -5
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertEqual(decoded.settings.oscPort, 53100, "a negative port must decode to the default, not throw")
     }
 
     // MARK: - Panic routing: TriggerRouter.routePanic() reaches transport.panic()

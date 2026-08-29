@@ -91,7 +91,11 @@ final class AppModel {
             runPreflightWarning()
         }
         if persist, document.show.settings.workspaceMode != newMode {
-            document.mutate { $0.settings.workspaceMode = newMode }
+            // Persisted so reopening the show restores the mode, but a mode
+            // flip is not a user edit worth an undo step — and undoing past
+            // it must never revert the live workspace mode (see
+            // ShowDocumentController.restore).
+            document.mutateWithoutUndo { $0.settings.workspaceMode = newMode }
         }
         syncStageDisplay()
     }
@@ -151,7 +155,21 @@ final class AppModel {
         }
         refreshRecents()
         document.onUndoRestore = { [weak self] in
-            self?.transport.revalidatePlayhead()
+            guard let self else { return }
+            self.transport.revalidatePlayhead()
+            // Undo snapshots include ShowSettings — resync every live mirror
+            // of it (remote-control listeners, stage display, running camera
+            // effects) so an undone settings change doesn't leave a server
+            // listening (or an effect applied) while the UI shows otherwise.
+            self.syncMIDIEnabled()
+            self.syncOSCEnabled()
+            self.syncWebRemoteEnabled()
+            self.syncStageDisplay()
+            for instance in self.transport.registry.instances {
+                if case .camera = instance.cue.body {
+                    self.pushEffects(cueID: instance.cue.id)
+                }
+            }
         }
         document.onDocumentReplaced = { [weak self] in
             guard let self else { return }

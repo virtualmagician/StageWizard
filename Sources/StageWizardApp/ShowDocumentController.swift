@@ -93,7 +93,12 @@ final class ShowDocumentController {
     }
 
     private func restore(_ entry: UndoEntry) {
+        // Workspace mode is live state driven directly by AppModel.setMode,
+        // not something undo/redo should ever flip out from under it — carry
+        // the current (live) mode forward across the restore.
+        let liveMode = show.settings.workspaceMode
         show = entry.show
+        show.settings.workspaceMode = liveMode
         selection = entry.selection.filter { show.cue(withID: $0) != nil }
         isDirty = savePointDepth != undoStack.count
         onUndoRestore?()
@@ -122,11 +127,49 @@ final class ShowDocumentController {
         savePointDepth = 0
     }
 
+    /// Save-time undo bookkeeping — called by `write(to:)` on a successful
+    /// save. Not `private`: it's the whole seam under test for the
+    /// coalescing-vs-savePointDepth fix, exercised directly (via
+    /// `@testable import`) so tests don't need to drive NSSavePanel/disk I/O.
+    ///
+    /// Anchors the save point at the current undo depth, then breaks
+    /// coalescing on the entry now anchoring it: without this, an edit
+    /// landing inside the coalesce window right after a save folds into that
+    /// entry, so undoStack.count stays == savePointDepth despite the unsaved
+    /// edit — a later redo would then report isDirty == false with real
+    /// unsaved changes on screen. Backdating (same trick as currentEntry(),
+    /// used by undo/redo) forces the next mutate to append a fresh entry
+    /// instead of coalescing into this one.
+    func markSaved() {
+        isDirty = false
+        savePointDepth = undoStack.count
+        if !undoStack.isEmpty {
+            undoStack[undoStack.count - 1].timestamp = ContinuousClock.now - .seconds(60)
+        }
+    }
+
+    /// Current undo-stack depth — not `private` only so tests can assert on
+    /// it directly around `markSaved()`; production logic only needs
+    /// `canUndo`.
+    var undoDepthForTesting: Int { undoStack.count }
+
     // MARK: - Mutation
 
     /// Single funnel for all model mutations so dirty tracking can't be missed.
     func mutate(_ change: (inout ShowFile) -> Void) {
         recordUndoSnapshot()
+        change(&show)
+        isDirty = true
+    }
+
+    /// Mutate without recording an undo step — for persisted state that
+    /// mirrors something already tracked live outside the undo stack (e.g.
+    /// workspace mode, which AppModel.setMode drives directly). Still marks
+    /// the document dirty: this is real persisted state, just not something
+    /// undo/redo should ever flip on its own.
+    func mutateWithoutUndo(_ change: (inout ShowFile) -> Void) {
+        undoRecordingSuspended = true
+        defer { undoRecordingSuspended = false }
         change(&show)
         isDirty = true
     }
@@ -213,8 +256,7 @@ final class ShowDocumentController {
             backupExistingFile(at: url)
             try data.write(to: url, options: .atomic)
             fileURL = url
-            isDirty = false
-            savePointDepth = undoStack.count
+            markSaved()
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             UserDefaults.standard.set(url.path, forKey: Self.lastShowPathKey)
             onRecentsChanged?()

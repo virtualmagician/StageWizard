@@ -139,18 +139,21 @@ final class WallClockTests: XCTestCase {
         provider.inner.durations[cue.id] = 0.2
         show.cues = [cue]
 
-        var t: TimeInterval = 90
+        // Ticks stay <=5s apart throughout (FIX 5's forward-gap guard treats
+        // anything wider as a stale/sleep gap) — mirrors the real 1 Hz loop
+        // closely enough while still landing cleanly on either side of the target.
+        var t: TimeInterval = 96
         transport.now = { t }
         transport.wallClockTick()   // first tick only establishes a baseline
         await wait(0.02)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 0, "no baseline-tick firing")
 
-        t = 110   // window (90, 110] crosses the target
+        t = 101   // window (96, 101] crosses the target
         transport.wallClockTick()
         await wait(0.05)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1, "fires once its target time is crossed")
 
-        t = 130   // later the same day — already fired today
+        t = 106   // later the same day — already fired today
         transport.wallClockTick()
         await wait(0.05)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1, "must not fire a second time later the same day")
@@ -164,10 +167,10 @@ final class WallClockTests: XCTestCase {
         provider.inner.durations[cue.id] = 0.2
         show.cues = [cue]
 
-        var t: TimeInterval = 90
+        var t: TimeInterval = 96
         transport.now = { t }
         transport.wallClockTick()
-        t = 110
+        t = 101   // window (96, 101] crosses the target — a live tick, not a stale gap
         transport.wallClockTick()
         await wait(0.05)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 0, "a disarmed cue must never fire from the wall clock")
@@ -178,22 +181,83 @@ final class WallClockTests: XCTestCase {
         provider.inner.durations[cue.id] = 0.2
         show.cues = [cue]
 
-        var t: TimeInterval = 90
+        var t: TimeInterval = 96
         transport.now = { t }
         transport.wallClockTick()   // baseline
-        t = 110
+        t = 101   // window (96, 101] crosses the target — a live (<=5s) tick
         transport.wallClockTick()   // fires today
         await wait(0.05)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1)
 
-        t = 86395   // still climbing toward midnight, no wrap yet
-        transport.wallClockTick()
-        t = 5       // ticked past midnight — wraps, clears today's fired set
-        transport.wallClockTick()
-        t = 110     // tomorrow's window (5, 110] crosses the target again
-        transport.wallClockTick()
+        t = 86399   // a big forward jump toward end of day — same as the app
+        transport.wallClockTick()   // just ticking along for hours; re-baselines, no fire.
+
+        t = 1       // a small (<=5s) backward step across midnight — a
+        transport.wallClockTick()   // genuine wrap: clears today's fired set.
+
+        // Walk forward in <=5s hops (mirroring the real 1 Hz ticking loop)
+        // until the window crosses the target again on the new day.
+        while t < 103 {
+            t = min(t + 5, 103)
+            transport.wallClockTick()
+        }
         await wait(0.05)
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 2, "a new local day re-arms the cue for one more fire")
+    }
+
+    /// FIX 5(a): a stale forward gap (e.g. the Mac slept through the
+    /// target) must not fire the cue it swallowed once ticking resumes —
+    /// only a live, roughly-1s-wide window fires anything.
+    func testSleepGapDoesNotBarrageFire() async {
+        let cue = Cue(number: "1", wallClock: 50, body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/1.wav"))))
+        provider.inner.durations[cue.id] = 0.2
+        show.cues = [cue]
+
+        var t: TimeInterval = 10
+        transport.now = { t }
+        transport.wallClockTick()   // baseline
+
+        t = 100   // a 90s forward jump, well past the 5s guard — sleep/wake.
+        transport.wallClockTick()
+        await wait(0.05)
+        XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 0, "a stale forward gap must not fire cues whose target fell inside it")
+
+        t = 103   // ticking resumes normally after the re-baseline.
+        transport.wallClockTick()
+        await wait(0.05)
+        XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 0, "target 50 already passed inside the stale gap — must not fire retroactively")
+    }
+
+    /// FIX 5(b): a backwards clock step that is NOT a genuine midnight
+    /// rollover (an NTP correction, a manual time change) must leave
+    /// firedToday alone, so a cue already fired today doesn't re-fire once
+    /// the clock resumes ticking forward past its target a second time.
+    func testBackwardsClockStepDoesNotRefireAnAlreadyFiredCue() async {
+        let cue = Cue(number: "1", wallClock: 100, body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/1.wav"))))
+        provider.inner.durations[cue.id] = 0.2
+        show.cues = [cue]
+
+        var t: TimeInterval = 96
+        transport.now = { t }
+        transport.wallClockTick()   // baseline
+        t = 101   // window (96, 101] crosses the target — a live (<=5s) tick
+        transport.wallClockTick()   // fires today
+        await wait(0.05)
+        XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1)
+
+        t = 90   // clock stepped backwards ~11s — nowhere near a midnight
+        transport.wallClockTick()   // wrap: must be treated as a clock step.
+        await wait(0.05)
+        XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1, "a backward clock step must not clear firedToday")
+
+        t = 94    // small forward hop, window (90, 94] doesn't reach the target
+        transport.wallClockTick()
+        t = 99    // window (94, 99] still doesn't reach the target
+        transport.wallClockTick()
+        t = 103   // window (99, 103] crosses the target's time again
+        transport.wallClockTick()
+        await wait(0.05)
+        XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 1, "already fired today — the backward step must not have cleared firedToday, so this must not re-fire")
     }
 
     func testWallClockNeverFiresWhilePanicking() async {
@@ -202,13 +266,13 @@ final class WallClockTests: XCTestCase {
         show.cues = [cue]
         show.settings.panicDuration = 5
 
-        var t: TimeInterval = 90
+        var t: TimeInterval = 96
         transport.now = { t }
         transport.wallClockTick()   // baseline
         transport.panic()          // soft panic: isPanicking stays true for the ramp window
 
-        t = 110
-        transport.wallClockTick()
+        t = 101   // window (96, 101] crosses the target — a live (<=5s) tick,
+        transport.wallClockTick()   // so this genuinely exercises the panic guard.
         await wait(0.05)
         XCTAssertTrue(transport.isPanicking, "still mid-ramp — the test would be meaningless otherwise")
         XCTAssertEqual(provider.armCounts[cue.id] ?? 0, 0, "a tick that lands while panicking must not fire")

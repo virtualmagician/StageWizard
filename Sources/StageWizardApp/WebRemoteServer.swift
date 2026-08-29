@@ -98,6 +98,10 @@ final class WebRemoteServer {
     private final class Connection {
         let connection: NWConnection
         var buffer = Data()
+        /// Fires 10s after the connection is accepted and cancels it if it's
+        /// still tracked then — hostile-input hardening against a client
+        /// that opens a connection and never sends a complete request.
+        var idleDeadlineTask: Task<Void, Never>?
         init(_ connection: NWConnection) { self.connection = connection }
     }
 
@@ -132,7 +136,16 @@ final class WebRemoteServer {
 
         newListener.stateUpdateHandler = { @Sendable [weak self] state in
             Task { @MainActor in
-                self?.handleListenerState(state)
+                // A restart (stop() then start()) can leave the OLD
+                // listener's stateUpdateHandler with a late .cancelled/
+                // .failed still in flight when the new listener is already
+                // up — without this identity check that stale callback would
+                // corrupt the NEW listener's isRunning, or even stop() it via
+                // the .failed branch. `listener?.stateUpdateHandler = nil` in
+                // stop() closes most of this window, but the check stays as
+                // the actual guarantee. Mirrors OSCServer exactly.
+                guard let self, self.listener === newListener else { return }
+                self.handleListenerState(state)
             }
         }
         newListener.newConnectionHandler = { @Sendable [weak self] connection in
@@ -147,9 +160,11 @@ final class WebRemoteServer {
 
     func stop() {
         for state in connections.values {
+            state.idleDeadlineTask?.cancel()
             state.connection.cancel()
         }
         connections.removeAll()
+        listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
         isRunning = false
@@ -172,7 +187,20 @@ final class WebRemoteServer {
         }
     }
 
+    /// Cap on concurrently tracked connections — hostile-input hardening
+    /// against a flood of opened-but-idle connections. A new connection
+    /// arriving with the cap already reached is refused immediately.
+    private static let maxConcurrentConnections = 32
+    /// Per-connection idle deadline — a client that opens a connection and
+    /// never completes a request (no `\r\n\r\n`) gets cut off rather than
+    /// held forever.
+    private static let idleDeadline: Duration = .seconds(10)
+
     private func accept(_ connection: NWConnection) {
+        guard connections.count < Self.maxConcurrentConnections else {
+            connection.cancel()
+            return
+        }
         let key = ObjectIdentifier(connection)
         connections[key] = Connection(connection)
         connection.stateUpdateHandler = { @Sendable [weak self] state in
@@ -181,13 +209,31 @@ final class WebRemoteServer {
             }
         }
         connection.start(queue: queue)
+        startIdleDeadline(for: key)
         receiveNext(key: key)
+    }
+
+    private func startIdleDeadline(for key: ObjectIdentifier) {
+        connections[key]?.idleDeadlineTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.idleDeadline)
+            guard !Task.isCancelled, let self, let state = self.connections[key] else { return }
+            state.connection.cancel()
+            self.removeConnection(key)
+        }
+    }
+
+    /// Single funnel for every removal path (send-complete, failure, cancel
+    /// state, cap refusal is a no-entry so it never reaches here) — keeps the
+    /// dictionary entry and its idle-deadline task cleaned up together.
+    private func removeConnection(_ key: ObjectIdentifier) {
+        connections[key]?.idleDeadlineTask?.cancel()
+        connections.removeValue(forKey: key)
     }
 
     private func handleConnectionState(_ state: NWConnection.State, key: ObjectIdentifier) {
         switch state {
         case .failed, .cancelled:
-            connections.removeValue(forKey: key)
+            removeConnection(key)
         default:
             break
         }
@@ -216,7 +262,7 @@ final class WebRemoteServer {
                 }
                 if state.buffer.count > WebRemoteServer.maxRequestBytes || isComplete || error != nil {
                     connection.cancel()
-                    self.connections.removeValue(forKey: key)
+                    self.removeConnection(key)
                     return
                 }
                 self.receiveNext(key: key)
@@ -240,7 +286,7 @@ final class WebRemoteServer {
             Task { @MainActor in
                 guard let self else { return }
                 self.connections[key]?.connection.cancel()
-                self.connections.removeValue(forKey: key)
+                self.removeConnection(key)
             }
         })
     }

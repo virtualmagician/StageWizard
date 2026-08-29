@@ -175,10 +175,13 @@ public final class TransportController {
     }
 
     /// Fire a specific cue directly (per-cue hotkeys, double-click).
-    /// After an undo/redo the playhead's cue may no longer exist — clear
-    /// it rather than leave GO pointing into the void.
+    /// After an undo/redo the playhead's cue may no longer exist — or may
+    /// still exist but have left the GO sequence (moved into a fire-all/
+    /// timeline group, or its group's mode changed). Either way standingByCue
+    /// would return nil and GO would go silently dead: clear the playhead so
+    /// GO stands by the first cue again.
     public func revalidatePlayhead() {
-        if let id = playheadID, show().cue(withID: id) == nil {
+        if let id = playheadID, !goSequence.contains(where: { $0.id == id }) {
             playheadID = nil
             playheadPastEnd = false
         }
@@ -236,20 +239,27 @@ public final class TransportController {
     private func markerDelay(for cue: Cue, markerID: UUID) -> TimeInterval? {
         let markers: [CueMarker]
         let startTime: TimeInterval
+        let endTime: TimeInterval?
         let rate: Double
         switch cue.body {
         case .audio(let body):
             markers = body.markers
             startTime = body.startTime
+            endTime = body.endTime
             rate = body.rate
         case .video(let body):
             markers = body.markers
             startTime = body.startTime
+            endTime = body.endTime
             rate = body.rate
         default:
             return nil
         }
         guard let marker = markers.first(where: { $0.id == markerID }) else { return nil }
+        // A marker beyond the trimmed OUT point would arm a follow after the
+        // cue has already ended — mirror the deleted-marker rule above:
+        // silent no-arm, no clamping.
+        if let endTime, marker.time > endTime { return nil }
         let mediaOffset = max(0, marker.time - startTime) / rate
         return cue.preWait + mediaOffset
     }
@@ -440,8 +450,24 @@ public final class TransportController {
         // instant wall-clock scheduling turns on.
         guard let previousTick = lastWallClockTick else { return }
 
-        // Midnight rolled over since the last tick: every cue gets a fresh day.
+        // Sleep/wake (or any large forward jump): the window since the last
+        // tick is stale, not a live 1-second slice — firing every cue whose
+        // target fell inside it would barrage cues that were legitimately
+        // skipped while the Mac was asleep. Re-baseline only (the defer
+        // above already advances lastWallClockTick); don't clear firedToday.
+        if nowTick - previousTick > 5 {
+            return
+        }
+
+        // Midnight rolled over since the last tick: every cue gets a fresh
+        // day — but only when the backwards jump is small enough to actually
+        // be a rollover (previousTick close to end-of-day, nowTick close to
+        // start-of-day). A larger backwards jump is a clock step (NTP
+        // correction, manual time change), not a genuine midnight wrap:
+        // re-baseline only and keep today's already-fired cues fired.
         if nowTick < previousTick {
+            let wrapDistance = (86400 - previousTick) + nowTick
+            guard wrapDistance <= 5 else { return }
             wallClockFiredToday.removeAll()
         }
         guard !isPanicking else { return }

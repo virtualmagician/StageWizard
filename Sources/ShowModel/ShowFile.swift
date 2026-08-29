@@ -98,20 +98,18 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         midiBindings = try container.decodeIfPresent([MIDIBindingEntry].self, forKey: .midiBindings) ?? []
         // Pre-D7 files predate OSC remote control entirely.
         oscEnabled = try container.decodeIfPresent(Bool.self, forKey: .oscEnabled) ?? false
-        if let decodedPort = try container.decodeIfPresent(UInt16.self, forKey: .oscPort),
-           (1024...65535).contains(decodedPort) {
-            oscPort = decodedPort
-        } else {
-            oscPort = 53100
-        }
+        // Decoded as Int, not UInt16: a corrupt/out-of-range value (70000,
+        // negative) would THROW straight through `decodeIfPresent(UInt16.self,
+        // …)` — JSONDecoder validates range fit before the `if let` ever gets
+        // a chance to fall back — and refuse the whole show file. Decoding as
+        // Int always succeeds for any JSON number, so the range check below
+        // can actually run and fall back instead of propagating the error.
+        let oscPortRaw = try container.decodeIfPresent(Int.self, forKey: .oscPort) ?? 53100
+        oscPort = (1024...65535).contains(oscPortRaw) ? UInt16(oscPortRaw) : 53100
         // Pre-D8 files predate the web remote entirely.
         webRemoteEnabled = try container.decodeIfPresent(Bool.self, forKey: .webRemoteEnabled) ?? false
-        if let decodedPort = try container.decodeIfPresent(UInt16.self, forKey: .webRemotePort),
-           (1024...65535).contains(decodedPort) {
-            webRemotePort = decodedPort
-        } else {
-            webRemotePort = 53200
-        }
+        let webRemotePortRaw = try container.decodeIfPresent(Int.self, forKey: .webRemotePort) ?? 53200
+        webRemotePort = (1024...65535).contains(webRemotePortRaw) ? UInt16(webRemotePortRaw) : 53200
         // Pre-D9 files predate the stage display entirely.
         stageDisplay = try container.decodeIfPresent(StageDisplaySettings.self, forKey: .stageDisplay) ?? StageDisplaySettings()
     }
