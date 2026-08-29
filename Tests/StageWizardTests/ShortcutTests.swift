@@ -81,6 +81,72 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(panics, 0)
     }
 
+    // MARK: - D18 (FIX 2): the reduced hardwired guard — nil/non-key window
+    // must NOT suppress panic/⌘Esc; text editing and sheets/modals still do.
+
+    /// The exact operator-trap regression: a synthesized ⌘Esc event with no
+    /// window (as it arrives when nothing can claim "key window" status —
+    /// the state the live incident left the operator in) must still fire
+    /// exit-Show-mode. Resets `passthroughOverride` to nil so the REAL
+    /// guard runs instead of the test-simulated one `setUp` installs.
+    func testNilWindowCommandEscFiresExitShowModeThroughRealGuard() {
+        manager.passthroughOverride = nil
+        let result = manager.handle(keyEvent(53, modifiers: .command))
+        XCTAssertNil(result, "⌘Esc must be consumed even with no window")
+        XCTAssertEqual(exitShowModes, 1)
+        XCTAssertEqual(panics, 0)
+    }
+
+    /// Same regression, plain Esc / panic.
+    func testNilWindowPlainEscFiresPanicThroughRealGuard() {
+        manager.passthroughOverride = nil
+        let result = manager.handle(keyEvent(53))
+        XCTAssertNil(result, "Esc must be consumed even with no window")
+        XCTAssertEqual(panics, 1)
+        XCTAssertEqual(exitShowModes, 0)
+    }
+
+    /// A non-hardwired binding must keep requiring a window — FIX 2 only
+    /// changes the guard for panic/⌘Esc, `shouldPassThrough` (used for every
+    /// ordinary binding/hotkey) is untouched.
+    func testNilWindowNonHardwiredActionStillPassesThroughUnchanged() {
+        manager.passthroughOverride = nil
+        let result = manager.handle(keyEvent(49))   // Space -> bound to .go
+        XCTAssertNotNil(result, "non-hardwired actions still require a window (unchanged)")
+        XCTAssertTrue(actions.isEmpty)
+    }
+
+    /// Text editing must still suppress plain Esc (panic) — mirrors the
+    /// existing ⌘Esc coverage above so both hardwired keys are pinned.
+    func testPlainEscPassesThroughWhileTextEditing() {
+        manager.passthroughOverride = { _ in true }   // simulate: text field focused
+        let result = manager.handle(keyEvent(53))
+        XCTAssertNotNil(result, "Esc while typing must pass through, not panic")
+        XCTAssertEqual(panics, 0)
+        XCTAssertEqual(exitShowModes, 0)
+    }
+
+    /// A sheet/modal session must suppress both hardwired keys too — Esc
+    /// closes the sheet, ⌘Esc doesn't reach through it either. Simulated via
+    /// the same override seam as text editing (the override is a single
+    /// pass-through verdict, same as `shouldPassThrough` already uses it for
+    /// the equivalent real AppKit state).
+    func testCommandEscPassesThroughWhenSheetOrModalIsUp() {
+        manager.passthroughOverride = { _ in true }   // simulate: sheet/modal attached
+        let result = manager.handle(keyEvent(53, modifiers: .command))
+        XCTAssertNotNil(result, "⌘Esc must not reach through a sheet/modal")
+        XCTAssertEqual(exitShowModes, 0)
+        XCTAssertEqual(panics, 0)
+    }
+
+    func testPlainEscPassesThroughWhenSheetOrModalIsUp() {
+        manager.passthroughOverride = { _ in true }   // simulate: sheet/modal attached
+        let result = manager.handle(keyEvent(53))
+        XCTAssertNotNil(result, "Esc must close the sheet, not panic")
+        XCTAssertEqual(panics, 0)
+        XCTAssertEqual(exitShowModes, 0)
+    }
+
     func testRepeatIsConsumedButDoesNotRefire() {
         _ = manager.handle(keyEvent(49))
         let result = manager.handle(keyEvent(49, isRepeat: true))

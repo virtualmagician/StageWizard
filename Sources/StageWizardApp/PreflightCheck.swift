@@ -110,14 +110,16 @@ enum Preflight {
             ))
         }
 
-        // D17: the stage display is set to the SAME screen as the operator's
-        // own window — Show mode will bury the console under it. Not an
-        // error (the show still plays fine; ⌘⎋ always recovers), but worth
-        // catching before the operator finds out live.
+        // D17, updated D18 (FIX 1): the stage display is set to the SAME
+        // screen as the operator's own window (or that can't be determined
+        // yet) — Show mode will open it as a floating window instead of
+        // fullscreen so it never buries the console. Not an error (the show
+        // still plays fine either way), but worth flagging before the
+        // operator finds out live.
         if stageDisplayCoversOperatorScreen {
             issues.append(PreflightIssue(
                 cueNumber: nil,
-                message: "Stage display is set to the operator's own screen — Show mode will cover your controls (⌘⎋ always exits).",
+                message: "Stage display is set to the operator's own screen — Show mode will open it as a floating window instead of fullscreen.",
                 severity: .warning
             ))
         }

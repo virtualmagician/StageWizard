@@ -153,16 +153,54 @@ final class StageDisplayController {
         return matchedDisplayID == operatorScreenDisplayID
     }
 
+    /// D18 (FIX 1): which presentation `sync` should use — factored out so
+    /// the operator-trap fix (never fullscreen over the operator's own
+    /// screen) is a plain, directly-testable decision with no window,
+    /// display, or `NSApp` lookups involved.
+    enum Style: Equatable {
+        case fullscreen
+        case floating
+    }
+
+    /// Show mode presents fullscreen ONLY when the matched display is
+    /// affirmatively known to be a DIFFERENT screen than the operator's own
+    /// window. Both failure modes — the matched screen IS the operator
+    /// screen, or the operator screen can't be resolved at all (e.g. at
+    /// launch, before the main window exists) — fall back to the same
+    /// floating presentation Rehearsal already uses. Floating is the safe
+    /// default: it never fights the operator for the screen, so there's
+    /// nothing that can trap the local key monitor behind an opaque,
+    /// click-through, non-activating window. Rehearsal is always floating,
+    /// unchanged from D14.
+    static func presentationStyle(
+        mode: WorkspaceMode, matchedScreenIsOperatorScreen: Bool, operatorScreenKnown: Bool
+    ) -> Style {
+        switch mode {
+        case .show:
+            return (!matchedScreenIsOperatorScreen && operatorScreenKnown) ? .fullscreen : .floating
+        case .rehearsal, .edit:
+            return .floating
+        }
+    }
+
     /// Reconcile the window with the current settings, activity state, and
     /// mode. `active` must already fold in mode + `settings.enabled` +
     /// display connectivity (see `isActive`) — callers compute it once
     /// (AppModel's `syncStageDisplay`) and pass it straight through. `mode`
-    /// additionally picks WHICH presentation to show while active: Show is
-    /// borderless-fullscreen on the matched display, Rehearsal is a floating
-    /// resizable panel (D14). `outputGroups` (D16) is the show's current
+    /// additionally picks WHICH presentation to show while active: Show
+    /// prefers borderless-fullscreen on the matched display, falling back to
+    /// the same floating presentation Rehearsal uses whenever `presentationStyle`
+    /// (D18, FIX 1) says fullscreen would land on the operator's own screen
+    /// (or that can't yet be determined) — never leave the operator with no
+    /// way to see their own controls. `operatorScreenDisplayID` is resolved
+    /// by the caller (`AppModel`) exactly like `fullscreenCoversOperatorScreen`
+    /// already required. `outputGroups` (D16) is the show's current
     /// output-group list — needed to tell a live group's program pane apart
     /// from a deleted one (see `syncProgramPanes`).
-    func sync(settings: StageDisplaySettings, outputGroups: [OutputGroup], active: Bool, mode: WorkspaceMode) {
+    func sync(
+        settings: StageDisplaySettings, outputGroups: [OutputGroup], active: Bool, mode: WorkspaceMode,
+        operatorScreenDisplayID: CGDirectDisplayID?
+    ) {
         lastSettings = settings
         guard active else {
             close()
@@ -175,7 +213,20 @@ final class StageDisplayController {
                 close()
                 return
             }
-            presentFullscreen(on: matched, settings: settings, outputGroups: outputGroups)
+            let matchedIsOperatorScreen = Self.fullscreenCoversOperatorScreen(
+                matchedDisplayID: matched.displayID, operatorScreenDisplayID: operatorScreenDisplayID
+            )
+            let style = Self.presentationStyle(
+                mode: mode,
+                matchedScreenIsOperatorScreen: matchedIsOperatorScreen,
+                operatorScreenKnown: operatorScreenDisplayID != nil
+            )
+            switch style {
+            case .fullscreen:
+                presentFullscreen(on: matched, settings: settings, outputGroups: outputGroups)
+            case .floating:
+                presentFloating(settings: settings, outputGroups: outputGroups)
+            }
         case .rehearsal:
             presentFloating(settings: settings, outputGroups: outputGroups)
         case .edit:

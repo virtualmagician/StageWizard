@@ -3,6 +3,10 @@ import AppKit
 /// One local keyDown monitor dispatches every plain-key and assigned shortcut.
 /// Menu items carry NO key equivalents for transport actions — this monitor is
 /// the single source of truth, so Space/Esc can be suppressed during text entry.
+/// D18: ⌘Esc (exit Show mode) is the deliberate exception — `ShowCommands`
+/// ALSO carries a menu item with this key equivalent, as a second, independent
+/// path out of a locked Show-mode workspace that fires even when this monitor
+/// can't (see that file's own comment for why the two paths never double-fire).
 @MainActor
 public final class ShortcutManager {
     /// Esc — hardwired to panic, never reassignable — panic must always work.
@@ -75,14 +79,19 @@ public final class ShortcutManager {
             return nil
         }
 
-        // Pass-through guards: never fire cues while the operator is typing,
-        // a sheet/modal is up, or a key is auto-repeating.
-        if shouldPassThrough(event) { return event }
-
-        // Esc = panic, hardcoded, plain Esc only. ⌘Esc = exit Show mode,
-        // same hardcoding — both physical-key-53, split by modifier so
-        // there's no ambiguity between them.
-        if event.keyCode == Self.panicKeyCode {
+        // D18 (FIX 2): hardwired keys — Esc = panic, plain Esc only; ⌘Esc =
+        // exit Show mode, same physical key-53, split by modifier so
+        // there's no ambiguity between them — are checked BEFORE the full
+        // pass-through guard, behind their OWN reduced guard
+        // (`shouldPassThroughHardwired`). This is the operator-trap fix: the
+        // full guard below treats any windowless or non-key-window event as
+        // "pass through", which silently swallowed panic and ⌘Esc exactly
+        // when the operator most needed them (no key window at all — e.g.
+        // the stage display's own non-activating window covering the
+        // operator's screen, or focus having slipped to another app). The
+        // reduced guard only suppresses for active text editing or a
+        // sheet/modal session — never for a merely absent/non-key window.
+        if event.keyCode == Self.panicKeyCode, !shouldPassThroughHardwired(event) {
             if binding.modifiers == 0 {
                 onPanic?()
                 return nil
@@ -92,6 +101,12 @@ public final class ShortcutManager {
                 return nil
             }
         }
+
+        // Pass-through guard for everything else (unchanged): never fire
+        // cues while the operator is typing, a sheet/modal is up, a key is
+        // auto-repeating, or the event isn't targeting the app's own key
+        // window.
+        if shouldPassThrough(event) { return event }
 
         if let (action, _) = bindingsProvider().first(where: { $0.value == binding }) {
             if !event.isARepeat { onAction?(action) }
@@ -104,6 +119,31 @@ public final class ShortcutManager {
         }
 
         return event
+    }
+
+    /// D18 (FIX 2): the reduced pass-through guard for hardwired keys
+    /// (panic, ⌘Esc exit-Show) — deliberately NOT the same guard as
+    /// ordinary bindings/hotkeys. A nil `event.window` or a non-key window
+    /// must NOT suppress a hardwired key: that's exactly the state a
+    /// trapped operator is in (no window able to receive the keystroke as
+    /// its "key" window), and it's precisely when panic/exit-Show must
+    /// still fire. Only two conditions still suppress: the operator is
+    /// actively typing (checking that needs a window, so this is a no-op
+    /// without one), or a sheet/modal session is up (Esc must close the
+    /// sheet, not panic/exit-Show underneath it). `passthroughOverride`
+    /// overrides this guard too, exactly like `shouldPassThrough`, so tests
+    /// keep one simple seam for both.
+    private func shouldPassThroughHardwired(_ event: NSEvent) -> Bool {
+        if let passthroughOverride { return passthroughOverride(event) }
+        if let window = event.window {
+            if let responder = window.firstResponder {
+                if responder is NSTextView || responder is NSText { return true }
+            }
+            if window.attachedSheet != nil { return true }
+            if window.isSheet { return true }
+        }
+        if NSApp.modalWindow != nil { return true }
+        return false
     }
 
     private func shouldPassThrough(_ event: NSEvent) -> Bool {

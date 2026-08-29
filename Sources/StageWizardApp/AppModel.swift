@@ -110,12 +110,14 @@ final class AppModel {
             document.mutateWithoutUndo { $0.settings.workspaceMode = newMode }
         }
         syncStageDisplay()
-        // D17: warn (once, on entry) if the stage display just presented
-        // fullscreen over the operator's own screen — Preflight already
-        // caught this before the switch, but the operator may not have run
-        // it, and this fires unconditionally the moment it actually happens.
+        // D18 (FIX 1): the stage display now NEVER presents fullscreen over
+        // the operator's own screen — `StageDisplayController.presentationStyle`
+        // falls back to floating instead. Warn (once, on entry) when that
+        // fallback engaged, so the operator knows why the stage display
+        // isn't fullscreen. Preflight already caught this before the
+        // switch, but the operator may not have run it.
         if newMode == .show, stageDisplayCoversOperatorScreen {
-            pushWarning("Stage display is covering the operator screen — press ⌘⎋ to exit Show mode.")
+            pushWarning("Stage display targets the operator screen — opened as a floating window instead.")
         }
     }
 
@@ -545,7 +547,8 @@ final class AppModel {
         // entered the mirrored set already has somewhere for `attachTarget`
         // to lease.
         stageDisplayController.sync(
-            settings: settings, outputGroups: document.show.settings.outputGroups, active: active, mode: mode
+            settings: settings, outputGroups: document.show.settings.outputGroups, active: active, mode: mode,
+            operatorScreenDisplayID: operatorScreenDisplayID
         )
         syncMirrorAttachments()
     }
@@ -621,27 +624,45 @@ final class AppModel {
         }
     }
 
-    /// D17: true when the stage display, if it presented fullscreen right
-    /// now, would land on the SAME physical display as the operator's own
-    /// window — used by both the Show-mode-entry warning (`setMode`) and
-    /// Preflight. The only place mode/display/window state gets resolved
-    /// into the bool each of those consumes, so `Preflight.run` itself
-    /// stays pure.
+    /// D17, updated D18 (FIX 1): true when Show mode would present the stage
+    /// display FLOATING instead of fullscreen because of the operator's own
+    /// screen — either the matched display IS that screen, or it can't be
+    /// resolved at all yet. Used by both the Show-mode-entry warning
+    /// (`setMode`) and Preflight; reuses `StageDisplayController.presentationStyle`
+    /// so this stays the exact same decision `sync` itself makes, never a
+    /// second, driftable copy of it. The only place mode/display/window
+    /// state gets resolved into the bool each of those consumes, so
+    /// `Preflight.run` itself stays pure.
     var stageDisplayCoversOperatorScreen: Bool {
         let settings = document.show.settings.stageDisplay
         guard settings.enabled, let fingerprint = settings.display,
               let matched = DisplayManager.shared.match(fingerprint) else { return false }
-        return StageDisplayController.fullscreenCoversOperatorScreen(
+        let matchedIsOperatorScreen = StageDisplayController.fullscreenCoversOperatorScreen(
             matchedDisplayID: matched.displayID, operatorScreenDisplayID: operatorScreenDisplayID
         )
+        return StageDisplayController.presentationStyle(
+            mode: .show,
+            matchedScreenIsOperatorScreen: matchedIsOperatorScreen,
+            operatorScreenKnown: operatorScreenDisplayID != nil
+        ) == .floating
     }
 
     /// The physical display hosting the operator's own (real, key-able)
     /// window — every StageWizard-owned output/preview/stage-display window
     /// refuses `canBecomeMain`, so `NSApp.mainWindow` always resolves to the
-    /// operator's real window when one exists.
+    /// operator's real window when one exists. D18: `mainWindow` is nil at
+    /// launch until SwiftUI actually presents the scene's window (this is
+    /// exactly the gap that let the stage display go fullscreen over the
+    /// operator's own not-yet-existing window) — fall back to the first
+    /// visible, titled, non-panel app window so a later resync (see
+    /// `StageWizardApp`'s `onAppear`) still finds it even if it's momentarily
+    /// not `mainWindow`. Still nil (operator screen "unknown") when neither
+    /// exists — `presentationStyle`'s safe default handles that.
     private var operatorScreenDisplayID: CGDirectDisplayID? {
-        guard let screen = NSApp.mainWindow?.screen else { return nil }
+        let operatorWindow = NSApp.mainWindow ?? NSApp.windows.first { window in
+            window.isVisible && window.styleMask.contains(.titled) && !(window is NSPanel)
+        }
+        guard let screen = operatorWindow?.screen else { return nil }
         return DisplayManager.connectedDisplay(for: screen)?.displayID
     }
 

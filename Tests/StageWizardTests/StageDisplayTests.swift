@@ -914,4 +914,49 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: 42, operatorScreenDisplayID: nil))
         XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: nil, operatorScreenDisplayID: nil))
     }
+
+    // MARK: - D18 (FIX 1): StageDisplayController.presentationStyle
+
+    func testPresentationStyleShowModeOtherScreenIsFullscreen() {
+        XCTAssertEqual(
+            StageDisplayController.presentationStyle(mode: .show, matchedScreenIsOperatorScreen: false, operatorScreenKnown: true),
+            .fullscreen
+        )
+    }
+
+    func testPresentationStyleShowModeOperatorScreenIsFloating() {
+        XCTAssertEqual(
+            StageDisplayController.presentationStyle(mode: .show, matchedScreenIsOperatorScreen: true, operatorScreenKnown: true),
+            .floating
+        )
+    }
+
+    func testPresentationStyleShowModeUnknownOperatorScreenIsFloating() {
+        // D18: the exact launch-restore trap — at launch, the main window
+        // may not exist yet when `sync` first runs, so the operator screen
+        // can't be resolved. The safe default is floating, never fullscreen.
+        XCTAssertEqual(
+            StageDisplayController.presentationStyle(mode: .show, matchedScreenIsOperatorScreen: false, operatorScreenKnown: false),
+            .floating
+        )
+    }
+
+    func testPresentationStyleShowModeOperatorScreenAndUnknownTogetherIsFloating() {
+        XCTAssertEqual(
+            StageDisplayController.presentationStyle(mode: .show, matchedScreenIsOperatorScreen: true, operatorScreenKnown: false),
+            .floating
+        )
+    }
+
+    func testPresentationStyleRehearsalIsAlwaysFloatingRegardlessOfOperatorScreen() {
+        for matched in [true, false] {
+            for known in [true, false] {
+                XCTAssertEqual(
+                    StageDisplayController.presentationStyle(mode: .rehearsal, matchedScreenIsOperatorScreen: matched, operatorScreenKnown: known),
+                    .floating,
+                    "rehearsal is unconditionally floating (matched: \(matched), known: \(known))"
+                )
+            }
+        }
+    }
 }

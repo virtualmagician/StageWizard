@@ -19,6 +19,27 @@ struct ShowCommands: Commands {
             }
             .keyboardShortcut("r")
         }
+        // D18 (FIX 3): a second, INDEPENDENT path out of Show mode — a
+        // hardwired-only menu equivalent for ⌘⎋, deliberately duplicating
+        // ShortcutKit's hardwired ⌘Esc (see `ShortcutManager`'s file header
+        // for the other side of this). Menu key equivalents dispatch
+        // whenever THIS APP is active, regardless of which window (if any)
+        // is currently key — unlike the local monitor above, which needs a
+        // live NSEvent stream and, per the exact operator-trap this whole
+        // phase fixes, can end up with no window able to claim "key" status
+        // at all. No double-fire: AppKit only reaches menu key-equivalent
+        // dispatch for a keyDown the local monitor did NOT already consume.
+        // The monitor consumes ⌘Esc (returns nil) whenever ITS OWN guard
+        // passes — so this menu item only ever fires on its own in exactly
+        // the state where the monitor's guard failed to, i.e. never both.
+        CommandGroup(after: .toolbar) {
+            Button("Exit Show Mode") {
+                guard app.mode == .show else { return }
+                app.setMode(.edit)
+            }
+            .keyboardShortcut(.escape, modifiers: .command)
+            .disabled(app.mode != .show)
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Show") { document.newDocument() }
                 .keyboardShortcut("n")

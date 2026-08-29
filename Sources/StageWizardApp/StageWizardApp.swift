@@ -77,7 +77,19 @@ struct StageWizardApp: App {
                 // App struct freely, and each re-init would otherwise leave
                 // the weak delegate hook pointing at a discarded throwaway —
                 // silently disabling the quit dialog and Finder opens.
-                .onAppear { AppDelegate.appModel = app }
+                .onAppear {
+                    AppDelegate.appModel = app
+                    // D18 (FIX 1): re-run the stage-display presentation
+                    // decision now that this window actually exists. Launch
+                    // can restore straight into Show mode (the saved
+                    // workspace mode) before this `onAppear` ever runs — at
+                    // that point `operatorScreenDisplayID` reads as unknown,
+                    // so `syncStageDisplay` already chose the safe floating
+                    // fallback; this resync lets it re-evaluate against the
+                    // real operator screen and go fullscreen if that's
+                    // actually safe.
+                    app.syncStageDisplay()
+                }
         }
         .commands {
             ShowCommands(document: app.document, app: app)
