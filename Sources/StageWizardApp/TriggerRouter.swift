@@ -37,4 +37,18 @@ final class TriggerRouter {
               let cue = appModel.document.show.cues.first(where: { $0.number == cueNumber }) else { return }
         appModel.transport.fire(cueID: cue.id)
     }
+
+    /// D21: stand the cue whose show-file `number` matches on the playhead,
+    /// WITHOUT firing it (StageWand's cue-select control). Same number
+    /// lookup as `route(cueNumber:)`, minus the `resolveGOTarget` step —
+    /// `TransportController.setPlayhead` already resolves an
+    /// enter-and-play-first group header to its first child AND verifies
+    /// GO-sequence membership on its own, so an unknown number, or a cue
+    /// that exists but isn't GO-able (e.g. a fire-all/timeline group child),
+    /// is a silent no-op that leaves the playhead exactly where it was.
+    func route(selectCueNumber: String) {
+        guard let appModel,
+              let cue = appModel.document.show.cues.first(where: { $0.number == selectCueNumber }) else { return }
+        appModel.transport.setPlayhead(cue.id)
+    }
 }

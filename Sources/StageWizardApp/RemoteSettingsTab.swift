@@ -69,7 +69,10 @@ struct RemoteSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("Addresses: /stagewizard/go, /stopall, /next, /prev, /toggle, /panic, /cue/{number}/fire")
+                Text("Addresses: /stagewizard/go, /stopall, /next, /prev, /toggle, /panic, /cue/{number}/fire, /cue/{number}/select")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Sends status feedback to any sender (StageWand): /stagewizard/status/…. Advertised on the network as _stagewizard._udp.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Unauthenticated — enable only on a trusted show network.")

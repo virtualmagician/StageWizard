@@ -246,7 +246,17 @@ final class AppModel {
             case .action(let action): self.triggerRouter.route(action)
             case .panic: self.triggerRouter.routePanic()
             case .fireCue(let number): self.triggerRouter.route(cueNumber: number)
+            case .selectCue(let number): self.triggerRouter.route(selectCueNumber: number)
             }
+        }
+        // D21: a brand-new (or pruned-and-returning) subscriber gets the
+        // FULL current status feed immediately, on its connection alone —
+        // always a fresh `old: nil` diff, independent of `lastOSCSnapshot`
+        // (which tracks what was last BROADCAST to everyone, not what any
+        // one subscriber has actually received).
+        oscServer.fullRefreshProvider = { [weak self] in
+            guard let self else { return [] }
+            return OSCStatusFeedback.changedMessages(old: nil, new: self.currentOSCSnapshot())
         }
 
         webRemoteServer.onCommand = { [weak self] command in
@@ -263,16 +273,129 @@ final class AppModel {
             guard let self else {
                 return WebRemoteStatus(standingByNumber: nil, standingByName: nil, notes: nil, runningCount: 0, showMode: false, panicking: false)
             }
-            let cue = self.transport.standingByCue
+            let core = self.currentRemoteStatusCore()
             return WebRemoteStatus(
-                standingByNumber: cue?.number,
-                standingByName: cue?.displayName,
-                notes: cue.flatMap { self.document.cue(withID: $0.id)?.notes },
-                runningCount: self.transport.registry.instances.count,
-                showMode: self.isShowMode,
-                panicking: self.transport.isPanicking
+                standingByNumber: core.standingByNumber,
+                standingByName: core.standingByName,
+                notes: core.notes,
+                runningCount: core.runningCount,
+                showMode: core.showMode,
+                panicking: core.panicking
             )
         }
+    }
+
+    // MARK: - D21: shared remote-status source (web remote + OSC feedback
+    // read the EXACT same state at the exact same call site, so they can't
+    // drift against each other)
+
+    /// The P1 status fields every remote-control status surface shares —
+    /// factored out of `webRemoteServer.statusProvider` so OSC feedback
+    /// (`currentOSCSnapshot`) reuses it verbatim rather than recomputing its
+    /// own (potentially divergent) copy.
+    private struct RemoteStatusCore {
+        var standingByNumber: String?
+        var standingByName: String?
+        var notes: String?
+        var runningCount: Int
+        var showMode: Bool
+        var panicking: Bool
+    }
+
+    private func currentRemoteStatusCore() -> RemoteStatusCore {
+        let cue = transport.standingByCue
+        return RemoteStatusCore(
+            standingByNumber: cue?.number,
+            standingByName: cue?.displayName,
+            notes: cue.flatMap { document.cue(withID: $0.id)?.notes },
+            runningCount: transport.registry.instances.count,
+            showMode: isShowMode,
+            panicking: transport.isPanicking
+        )
+    }
+
+    /// The full OSC status snapshot — `currentRemoteStatusCore()` plus the
+    /// GO-sequence window (index/total/prev/next) that only OSC needs.
+    private func currentOSCSnapshot() -> OSCStatusFeedback.Snapshot {
+        let core = currentRemoteStatusCore()
+        let window = OSCStatusFeedback.windowInfo(goSequence: transport.goSequence, standingByID: transport.standingByCue?.id)
+        return OSCStatusFeedback.Snapshot(
+            standingByNumber: core.standingByNumber ?? "",
+            standingByName: core.standingByName ?? "",
+            notes: core.notes ?? "",
+            runningCount: core.runningCount,
+            panic: core.panicking,
+            showMode: core.showMode,
+            windowIndex: window.index,
+            windowTotal: window.total,
+            prevNum: window.prevNum,
+            prevName: window.prevName,
+            nextNum: window.nextNum,
+            nextName: window.nextName
+        )
+    }
+
+    // MARK: - D21: OSC status feedback tick (10 Hz while OSC is enabled)
+
+    /// Feedback-tick state — never persisted, never observed by SwiftUI
+    /// (hence `@ObservationIgnored`, mirroring `activityToken` above).
+    @ObservationIgnored private var oscFeedbackTask: Task<Void, Never>?
+    @ObservationIgnored private var lastOSCSnapshot: OSCStatusFeedback.Snapshot?
+    @ObservationIgnored private var oscFeedbackTickCount = 0
+
+    private static let oscFeedbackTickInterval: Duration = .milliseconds(100)   // 10 Hz
+    /// Elapsed rides the same tick but only every 5th one (10 Hz / 5 = 2 Hz)
+    /// — it always changes, so it can't ride the diffed snapshot above.
+    private static let oscElapsedTickDivisor = 5
+
+    /// Start the 10 Hz feedback loop — called from `applyOSCSettings`
+    /// alongside `oscServer.start(port:)`, never on its own.
+    private func startOSCFeedback() {
+        guard oscFeedbackTask == nil else { return }
+        lastOSCSnapshot = nil
+        oscFeedbackTickCount = 0
+        oscFeedbackTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.oscFeedbackTick()
+                try? await Task.sleep(for: Self.oscFeedbackTickInterval)
+            }
+        }
+    }
+
+    /// Stop the feedback loop and forget the last-sent snapshot — called
+    /// alongside `oscServer.stop()` so a later restart always re-sends a
+    /// full picture rather than diffing against stale state.
+    private func stopOSCFeedback() {
+        oscFeedbackTask?.cancel()
+        oscFeedbackTask = nil
+        lastOSCSnapshot = nil
+        oscFeedbackTickCount = 0
+    }
+
+    /// One tick: diff the current snapshot against the last-broadcast one
+    /// and send whatever changed; every 5th tick also sends
+    /// `/stagewizard/status/elapsed` for the most-recently-started RUNNING
+    /// instance. "Most-recently-started" = the LAST element of
+    /// `registry.instances` whose state is `.running` — instances are
+    /// appended in fire order and never reordered (`ActiveCuesRegistry.add`),
+    /// so the last `.running` entry is the most recently started one still
+    /// actually playing (as opposed to pre-waiting, holding, paused, or
+    /// fading). No `.running` instance this tick (even if `runningCount` is
+    /// nonzero — e.g. everything active is mid-preWait) simply skips the
+    /// elapsed message for that tick.
+    private func oscFeedbackTick() {
+        let snapshot = currentOSCSnapshot()
+        let changed = OSCStatusFeedback.changedMessages(old: lastOSCSnapshot, new: snapshot)
+        lastOSCSnapshot = snapshot
+        if !changed.isEmpty {
+            oscServer.broadcast(changed)
+        }
+
+        oscFeedbackTickCount += 1
+        guard oscFeedbackTickCount % Self.oscElapsedTickDivisor == 0 else { return }
+        guard let running = transport.registry.instances.last(where: { $0.state == .running }) else { return }
+        oscServer.broadcast([OSCStatusFeedback.elapsedMessage(elapsed: running.elapsed ?? 0, duration: running.duration)])
     }
 
     private func wireEngines(provider: EnginePlayerProvider) {
@@ -489,11 +612,16 @@ final class AppModel {
     }
 
     /// Always stop first: the only way to rebind to a new port, and a clean
-    /// no-op when the listener isn't running.
+    /// no-op when the listener isn't running. D21: the feedback tick's
+    /// lifecycle is tied 1:1 to the listener's — it has nothing to send
+    /// without a live listener, and a port rebind should never leave a
+    /// stale tick broadcasting into a dead server.
     private func applyOSCSettings() {
         oscServer.stop()
+        stopOSCFeedback()
         guard document.show.settings.oscEnabled else { return }
         oscServer.start(port: document.show.settings.oscPort)
+        startOSCFeedback()
     }
 
     /// Start/stop the web remote HTTP server AND remember the choice in the

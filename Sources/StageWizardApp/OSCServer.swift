@@ -22,11 +22,73 @@ enum OSCCommand: Equatable {
     case action(ShortcutAction)
     case panic
     case fireCue(number: String)
+    /// D21: stand a cue by (playhead only) WITHOUT firing it — see
+    /// `TriggerRouter.route(selectCueNumber:)`.
+    case selectCue(number: String)
+}
+
+/// D21: tracks OSC feedback subscribers — any source endpoint heard from
+/// (any inbound datagram, `/stagewand/ping` keepalives included) within the
+/// last `timeout` seconds counts as "live". A pure, generic value type
+/// (keyed by any `Hashable` endpoint, not tied to `NWEndpoint`) so it's
+/// directly unit-testable with a fake clock and no real socket — mirrors
+/// `TransportController.now`'s injectable-clock convention. `OSCServer`
+/// holds one instance keyed by `NWEndpoint` (the real socket-level type,
+/// itself constructible purely — `.hostPort(host:port:)` — so even the
+/// production key type needs no live connection to test against).
+struct OSCSubscriberRegistry<Endpoint: Hashable> {
+    /// How long a subscriber stays "live" after its last-heard datagram —
+    /// fixed by the wire contract (D21 handoff), not configurable.
+    static var timeout: TimeInterval { 5 }
+
+    private var lastHeard: [Endpoint: TimeInterval] = [:]
+    /// Injectable clock — real default is wall-clock seconds; tests supply
+    /// their own monotonically-increasing closure to drive pruning without
+    /// real sleeps.
+    var now: () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
+
+    init(now: @escaping () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }) {
+        self.now = now
+    }
+
+    /// Record a datagram from `endpoint` at the current time. Returns `true`
+    /// when this is a NEW subscriber — first contact ever, or a return after
+    /// having gone stale and been pruned — the trigger for a full status
+    /// refresh to that endpoint alone. Prunes stale entries first so a
+    /// returning endpoint is correctly detected as "new" rather than
+    /// silently refreshing a timestamp that should already be gone.
+    @discardableResult
+    mutating func touch(_ endpoint: Endpoint) -> Bool {
+        let t = now()
+        prune(at: t)
+        let isNewSubscriber = lastHeard[endpoint] == nil
+        lastHeard[endpoint] = t
+        return isNewSubscriber
+    }
+
+    /// Endpoints heard from within the last `timeout` seconds, as of right
+    /// now — pruning first so a stale entry is never reported live.
+    mutating func liveEndpoints() -> Set<Endpoint> {
+        prune(at: now())
+        return Set(lastHeard.keys)
+    }
+
+    private mutating func prune(at t: TimeInterval) {
+        lastHeard = lastHeard.filter { t - $0.value <= Self.timeout }
+    }
 }
 
 /// Zero-dependency UDP OSC 1.0 listener (Network.framework): parses incoming
 /// datagrams into commands and hands them to `onCommand` — OSC is
-/// TriggerRouter's second remote-control client, after MIDI.
+/// TriggerRouter's second remote-control client, after MIDI. D21 adds the
+/// reverse direction: outbound status FEEDBACK to any live subscriber (an
+/// endpoint heard from within the last 5s — see `OSCSubscriberRegistry`),
+/// so a hardware controller (StageWand) never has to poll HTTP. The
+/// listener also advertises itself over Bonjour (`_stagewizard._udp`) so a
+/// subscriber can find it without a hardcoded IP. AppModel supplies the
+/// actual status content via `fullRefreshProvider` and drives periodic
+/// `broadcast(_:)` calls — this class only owns the wire mechanics
+/// (encode/send/subscriber-tracking), never show state.
 ///
 /// Concurrency: @MainActor, mirroring MIDIController. Network.framework
 /// delivers listener state updates, new-connection callbacks, and
@@ -50,9 +112,27 @@ final class OSCServer {
 
     var onCommand: ((OSCCommand) -> Void)?
 
+    /// D21: called synchronously whenever a NEW subscriber is detected
+    /// (first datagram, or a return after being pruned) — must return the
+    /// FULL current status feed (every P1+P2 address), which is sent to
+    /// that subscriber's connection alone. AppModel wires this to
+    /// `OSCStatusFeedback.changedMessages(old: nil, new: currentSnapshot())`.
+    /// OSCServer itself knows nothing about show state — this closure is the
+    /// only bridge, exactly like `onCommand` is for inbound routing.
+    var fullRefreshProvider: (() -> [OSCMessage])?
+
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var connections: [ObjectIdentifier: NWConnection] = [:]
     @ObservationIgnored private let queue = DispatchQueue(label: "com.marcotempest.stagewizard.osc")
+    /// D21: last-heard timestamp per source endpoint — see
+    /// `OSCSubscriberRegistry`. Keyed by the real `NWEndpoint` (the remote
+    /// address of whichever per-flow `NWConnection` a datagram arrived on).
+    @ObservationIgnored private var subscribers = OSCSubscriberRegistry<NWEndpoint>()
+
+    /// Bonjour service type this listener advertises itself under — no
+    /// `NSBonjourServices` entry needed (that key is for BROWSING, not
+    /// advertising). Name defaults to the host name.
+    private static let bonjourServiceType = "_stagewizard._udp"
 
     init() {}
 
@@ -77,6 +157,8 @@ final class OSCServer {
             lastError = error.localizedDescription
             return
         }
+        // Bonjour advertising (D21/P3) — must be set before `start(queue:)`.
+        newListener.service = NWListener.Service(type: Self.bonjourServiceType)
 
         newListener.stateUpdateHandler = { @Sendable [weak self] state in
             Task { @MainActor in
@@ -107,6 +189,7 @@ final class OSCServer {
             connection.cancel()
         }
         connections.removeAll()
+        subscribers = OSCSubscriberRegistry<NWEndpoint>()
         listener?.stateUpdateHandler = nil
         listener?.cancel()
         listener = nil
@@ -166,12 +249,22 @@ final class OSCServer {
     /// the MainActor hop.
     private func receiveNext(on connection: NWConnection, key: ObjectIdentifier) {
         connection.receiveMessage { @Sendable [weak self] data, _, _, error in
+            let receivedDatagram = data != nil
             let commands: [OSCCommand] = {
                 guard let data, !data.isEmpty else { return [] }
                 return OSCServer.parse(data).compactMap { OSCServer.command(for: $0.address) }
             }()
             Task { @MainActor in
                 guard let self, self.connections[key] != nil else { return }
+                // D21: ANY inbound datagram counts as "heard from" for
+                // subscriber purposes — including `/stagewand/ping` (a
+                // dedicated keepalive) and anything that fails to parse.
+                // This must run before dispatching commands so a brand-new
+                // subscriber's very first real command still arrives after
+                // its full refresh, not before.
+                if receivedDatagram {
+                    self.noteSubscriber(connection)
+                }
                 for command in commands {
                     self.onCommand?(command)
                 }
@@ -183,6 +276,88 @@ final class OSCServer {
                 self.receiveNext(on: connection, key: key)
             }
         }
+    }
+
+    // MARK: - D21: OSC status feedback (MainActor — subscriber tracking +
+    // outbound send; content comes entirely from AppModel via the closures
+    // above, so this class stays ignorant of show state)
+
+    /// Touch the subscriber registry for `connection`'s remote endpoint; a
+    /// brand-new (or pruned-and-returning) subscriber gets an immediate,
+    /// full status refresh on this connection alone.
+    private func noteSubscriber(_ connection: NWConnection) {
+        guard subscribers.touch(connection.endpoint) else { return }
+        guard let fullRefreshProvider else { return }
+        for message in fullRefreshProvider() {
+            send(message, on: connection)
+        }
+    }
+
+    /// Send one OSC message to every currently-live subscriber, each on its
+    /// own already-open per-flow connection — no new socket. No-op while the
+    /// listener isn't running (feedback rides `oscEnabled`/the listener
+    /// lifecycle, same as everything else here).
+    func broadcast(_ messages: [OSCMessage]) {
+        guard isRunning, !messages.isEmpty else { return }
+        let live = subscribers.liveEndpoints()
+        guard !live.isEmpty else { return }
+        for connection in connections.values where live.contains(connection.endpoint) {
+            for message in messages {
+                send(message, on: connection)
+            }
+        }
+    }
+
+    private func send(_ message: OSCMessage, on connection: NWConnection) {
+        let data = OSCServer.encode(address: message.address, arguments: message.arguments)
+        connection.send(content: data, completion: .idempotent)
+    }
+
+    // MARK: - Pure OSC 1.0 encoding (nonisolated + static: no actor hop
+    // needed, and directly unit-testable — exact mirror of the parsing
+    // section below: same 4-byte-padded address/type-tag/argument layout,
+    // same big-endian i/f. `parse(encode(address:arguments:))` round-trips
+    // to `[OSCMessage(address:arguments:)]` for every argument combination
+    // this parser understands — see OSCFeedbackTests.
+
+    nonisolated static func encode(address: String, arguments: [OSCArgument]) -> Data {
+        var data = encodeOSCString(address)
+        var tags = ","
+        for argument in arguments {
+            switch argument {
+            case .int32: tags.append("i")
+            case .float32: tags.append("f")
+            case .string: tags.append("s")
+            }
+        }
+        data.append(encodeOSCString(tags))
+        for argument in arguments {
+            switch argument {
+            case .int32(let value): data.append(encodeInt32(value))
+            case .float32(let value): data.append(encodeFloat32(value))
+            case .string(let value): data.append(encodeOSCString(value))
+            }
+        }
+        return data
+    }
+
+    /// UTF-8 bytes, one null terminator, padded with more nulls to a 4-byte
+    /// boundary — exactly what `readOSCString` below expects to consume.
+    nonisolated private static func encodeOSCString(_ value: String) -> Data {
+        var data = Data(value.utf8)
+        data.append(0)
+        while data.count % 4 != 0 { data.append(0) }
+        return data
+    }
+
+    nonisolated private static func encodeInt32(_ value: Int32) -> Data {
+        let bits = UInt32(bitPattern: value)
+        return Data([UInt8((bits >> 24) & 0xFF), UInt8((bits >> 16) & 0xFF), UInt8((bits >> 8) & 0xFF), UInt8(bits & 0xFF)])
+    }
+
+    nonisolated private static func encodeFloat32(_ value: Float) -> Data {
+        let bits = value.bitPattern
+        return Data([UInt8((bits >> 24) & 0xFF), UInt8((bits >> 16) & 0xFF), UInt8((bits >> 8) & 0xFF), UInt8(bits & 0xFF)])
     }
 
     // MARK: - Pure OSC 1.0 parsing (nonisolated + static: no actor hop
@@ -299,8 +474,12 @@ final class OSCServer {
     // MARK: - Pure routing table (nonisolated + static: directly unit-testable)
 
     /// Fixed OSC address map. Anything unrecognized (including a malformed
-    /// `/stagewizard/cue/.../fire`) returns nil — a remote surface has no
+    /// `/stagewizard/cue/.../fire` or `.../select`, and `/stagewand/ping` —
+    /// the wand's dedicated keepalive) returns nil — a remote surface has no
     /// operator-facing warning UI, so unknown addresses are ignored silently.
+    /// (`/stagewand/ping` still counts as a live subscriber — see
+    /// `noteSubscriber`, which runs on every inbound datagram regardless of
+    /// whether it resolves to a command here.)
     nonisolated static func command(for address: String) -> OSCCommand? {
         switch address {
         case "/stagewizard/go": return .action(.go)
@@ -310,20 +489,35 @@ final class OSCServer {
         case "/stagewizard/toggle": return .action(.togglePlayback)
         case "/stagewizard/panic": return .panic
         default:
-            return fireCueCommand(for: address)
+            return fireCueCommand(for: address) ?? selectCueCommand(for: address)
         }
     }
 
     nonisolated private static let cuePrefix = "/stagewizard/cue/"
-    nonisolated private static let cueSuffix = "/fire"
+    nonisolated private static let fireSuffix = "/fire"
+    nonisolated private static let selectSuffix = "/select"
 
-    nonisolated private static func fireCueCommand(for address: String) -> OSCCommand? {
-        guard address.hasPrefix(cuePrefix), address.hasSuffix(cueSuffix) else { return nil }
+    /// Shared prefix/suffix stripping for `/stagewizard/cue/<number>/<suffix>`
+    /// addresses — `<number>` is free text (dotted numbers like "10.5" are
+    /// normal), so it's just "whatever sits between the fixed prefix and
+    /// suffix, provided it's non-empty and contains no further slash".
+    nonisolated private static func cueNumber(in address: String, suffix: String) -> String? {
+        guard address.hasPrefix(cuePrefix), address.hasSuffix(suffix) else { return nil }
         let start = address.index(address.startIndex, offsetBy: cuePrefix.count)
-        let end = address.index(address.endIndex, offsetBy: -cueSuffix.count)
-        guard start < end else { return nil }   // no number between "cue/" and "/fire"
+        let end = address.index(address.endIndex, offsetBy: -suffix.count)
+        guard start < end else { return nil }
         let number = String(address[start..<end])
         guard !number.isEmpty, !number.contains("/") else { return nil }
-        return .fireCue(number: number)
+        return number
+    }
+
+    nonisolated private static func fireCueCommand(for address: String) -> OSCCommand? {
+        cueNumber(in: address, suffix: fireSuffix).map { .fireCue(number: $0) }
+    }
+
+    /// D21: `/stagewizard/cue/<number>/select` — stand the cue by without
+    /// firing. See `TriggerRouter.route(selectCueNumber:)` for resolution.
+    nonisolated private static func selectCueCommand(for address: String) -> OSCCommand? {
+        cueNumber(in: address, suffix: selectSuffix).map { .selectCue(number: $0) }
     }
 }

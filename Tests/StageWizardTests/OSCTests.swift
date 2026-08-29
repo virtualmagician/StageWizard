@@ -198,6 +198,28 @@ final class OSCTests: XCTestCase {
         XCTAssertNil(OSCServer.command(for: "/stagewizard/cue//fire"))
     }
 
+    // MARK: - D21: router table — /stagewizard/cue/{number}/select
+
+    func testCommandForSelectCueWithDottedNumber() {
+        XCTAssertEqual(OSCServer.command(for: "/stagewizard/cue/10.5/select"), .selectCue(number: "10.5"))
+    }
+
+    func testCommandForSelectCueWithIntegerNumber() {
+        XCTAssertEqual(OSCServer.command(for: "/stagewizard/cue/3/select"), .selectCue(number: "3"))
+    }
+
+    func testCommandForEmptySelectCueNumberIsNil() {
+        XCTAssertNil(OSCServer.command(for: "/stagewizard/cue//select"))
+    }
+
+    /// D21: `/stagewand/ping` — the wand's dedicated keepalive — resolves to
+    /// no command (same silent-ignore path as any other unmapped address);
+    /// its subscriber-keepalive effect is tested at the OSCServer level in
+    /// OSCFeedbackTests, not here (this file avoids real sockets).
+    func testCommandForStageWandPingIsNil() {
+        XCTAssertNil(OSCServer.command(for: "/stagewand/ping"))
+    }
+
     // MARK: - Codable: ShowSettings.oscEnabled / oscPort
 
     func testOSCSettingsDefaultOffWithDefaultPort() {
@@ -312,5 +334,28 @@ final class OSCTests: XCTestCase {
         app.document.mutate { $0.cues = [cue] }
         app.oscServer.onCommand?(.fireCue(number: "7"))
         XCTAssertEqual(app.transport.registry.instances.first?.cue.id, cue.id)
+    }
+
+    // MARK: - D21: AppModel dispatch: .selectCue → TriggerRouter → setPlayhead (never fires)
+
+    func testOSCSelectCueCommandMovesPlayheadWithoutFiring() {
+        let app = AppModel()
+        let cue = Cue(number: "7", body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/7.wav"))))
+        app.document.mutate { $0.cues = [cue] }
+        app.oscServer.onCommand?(.selectCue(number: "7"))
+        XCTAssertEqual(app.transport.playheadID, cue.id)
+        XCTAssertTrue(app.transport.registry.instances.isEmpty, "select must never fire the cue")
+    }
+
+    func testOSCSelectCueUnknownNumberIsNoOp() {
+        let app = AppModel()
+        let cue = Cue(number: "7", body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/7.wav"))))
+        app.document.mutate { $0.cues = [cue] }
+        app.oscServer.onCommand?(.selectCue(number: "7"))
+        XCTAssertEqual(app.transport.playheadID, cue.id)
+
+        app.oscServer.onCommand?(.selectCue(number: "does-not-exist"))
+        XCTAssertEqual(app.transport.playheadID, cue.id, "an unknown number must leave the playhead untouched")
+        XCTAssertTrue(app.transport.registry.instances.isEmpty)
     }
 }

@@ -85,7 +85,11 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   **MIDI** (any note or CC, assigned by MIDI-Learn, hot-plug aware; a CC
   fires only on the press, so a held pedal can't machine-gun GO), **OSC**
   over UDP (`/stagewizard/go`, `/stopall`, `/next`, `/prev`, `/toggle`,
-  `/panic`, `/cue/{number}/fire`), and a **web remote** — the app serves a
+  `/panic`, `/cue/{number}/fire`, `/cue/{number}/select`) — which also
+  advertises itself over Bonjour (`_stagewizard._udp`) and pushes live
+  status feedback (standing-by cue, running count, panic, window, notes,
+  elapsed) to any sender it's heard from recently, so a hardware
+  controller never has to poll — and a **web remote** — the app serves a
   dark phone page (huge GO, prev/next, double-tap STOP ALL, standing-by cue
   + notes) at a QR code you scan from the settings panel. All zero-config,
   zero-dependency, off by default, LAN-only.
