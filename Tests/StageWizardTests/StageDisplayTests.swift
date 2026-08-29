@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import QuartzCore
 @testable import StageWizard
 
 /// Phase D9: stage display — a fullscreen performer-facing confidence
@@ -958,5 +960,26 @@ final class StageDisplayTests: XCTestCase {
                 )
             }
         }
+    }
+
+    // MARK: - D19: content container is layer-backed synchronously at construction (suspect 1)
+
+    /// Pins the invariant `syncProgramPanes`' registration guard depends on:
+    /// the container's backing layer must already exist the instant
+    /// `makeContentContainer` returns — no window, no display pass. If this
+    /// invariant were ever lost, `syncProgramPanes` would hit its nil-layer
+    /// guard on EVERY sync, register no external host for any program pane,
+    /// forever, with no visible error — exactly what the D19 bug report
+    /// described (program panes showing only their placeholder). Calling
+    /// with `appModel: nil` deliberately builds no SwiftUI content, so this
+    /// stays a pure, dependency-free check with still no window shown —
+    /// consistent with this file's "creates no windows" rule above.
+    func testContentContainerIsLayerBackedImmediatelyAtConstruction() {
+        let (container, panicLayer) = StageDisplayController.makeContentContainer(
+            size: CGSize(width: 400, height: 300), appModel: nil
+        )
+        XCTAssertTrue(container.wantsLayer, "wantsLayer must be set at construction, before any sync can run")
+        XCTAssertNotNil(container.layer, "backing layer must exist synchronously — no window, no display pass")
+        XCTAssertNil(panicLayer, "no appModel passed in => no SwiftUI content/panic overlay built")
     }
 }

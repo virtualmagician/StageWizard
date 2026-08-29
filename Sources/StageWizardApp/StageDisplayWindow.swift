@@ -121,8 +121,34 @@ final class StageDisplayController {
     /// enabled AND the group still exists. `EngineBridge`'s
     /// `stageDisplayProgramGroupIDs` closure reads this (via AppModel) to
     /// decide whether a cue's group should ALSO mirror here. D16 replaces
-    /// D13's single `isProgramPaneShowing` Bool.
+    /// D13's single `isProgramPaneShowing` Bool. D19: deliberately derived
+    /// from `programHostLayers.keys` — the set of groups actually
+    /// REGISTERED with `OutputWindowManager` — rather than, say, every
+    /// enabled pane in settings. A pane whose registration didn't happen
+    /// (the container had no layer, `syncProgramPanes`' guard fired) must
+    /// NOT appear here, or `EngineBridge.resolveTargets` would add a
+    /// program target that has nowhere to lease a layer from.
     var mirroredProgramGroupIDs: Set<UUID> { Set(programHostLayers.keys) }
+
+    /// Test-only introspection (also handy for future debugging): the
+    /// currently-presented window's content container's backing layer, if
+    /// any. `internal`, not `public` or `private` — reachable only via
+    /// `@testable import` — so a regression test can pin the D19 z-order
+    /// invariant (PANIC above PROGRAM above the ordinary panes) against the
+    /// REAL, currently-showing window's actual layer tree instead of a
+    /// synthetic stand-in. Forces a synchronous display pass first: AppKit
+    /// defers syncing a layer-backed view's own subview layers (`content`,
+    /// `panic`) into the container's `sublayers` array until the window's
+    /// next real display cycle — normally driven by the run loop, which a
+    /// synchronous test never spins on its own. Without forcing it here, a
+    /// test could read back only the layer this class itself inserted
+    /// synchronously (the program pane) and miss the exact append-after
+    /// ordering that made suspect 2 possible in the first place. Harmless
+    /// to call repeatedly; production code never reads this.
+    var debugContainerLayer: CALayer? {
+        window?.displayIfNeeded()
+        return window?.contentView?.layer
+    }
 
     /// Pure decision: should the stage display window be open right now?
     /// Factored out of `sync` so it's directly testable without creating
@@ -328,6 +354,25 @@ final class StageDisplayController {
     /// "PROGRAM · (deleted)" placeholder; see `StageDisplayContentView`.
     private func syncProgramPanes(settings: StageDisplaySettings, outputGroups: [OutputGroup], in window: NSWindow) {
         guard let container = window.contentView, let containerLayer = container.layer else {
+            // D19: this must be unreachable. `makeContentContainer` sets
+            // `wantsLayer = true` on the container AT CREATION, before this
+            // window is ever handed back to `presentFullscreen`/
+            // `presentFloating` — that synchronously materializes
+            // `container.layer` (verified: NSView creates its backing layer
+            // the instant `wantsLayer` flips true, no display pass needed),
+            // so `window.contentView` can never legitimately have a nil
+            // layer here. If this guard ever fires it means SOME future
+            // change replaced/rebuilt the container without going through
+            // `makeContentContainer` — and the consequence is severe and
+            // silent: no external host ever registers, `mirroredProgramGroupIDs`
+            // stays permanently empty, so every program pane forever shows
+            // only its placeholder with no error anywhere (this is exactly
+            // what the D19 bug report described). Trip loudly in debug
+            // builds; still degrade safely (teardown, no crash) in release.
+            assertionFailure(
+                "StageDisplayController.syncProgramPanes: content container has no backing layer — " +
+                "stage-display mirroring cannot register any program pane. See makeContentContainer."
+            )
             teardownAllProgramPanes()
             return
         }
@@ -360,10 +405,28 @@ final class StageDisplayController {
 
             let layer = CALayer()
             layer.frame = frame
-            // Transparent by design — the SwiftUI pane behind it paints the
-            // black background + dim "PROGRAM · <group>" placeholder; this
-            // layer only ever gains content when a player mirrors onto it,
-            // so idle stays see-through to that placeholder.
+            // D19 (suspect 2): explicit zPosition, NOT array order, is what
+            // actually guarantees this layer paints above the ordinary panes
+            // and below PANIC. `container` is a layer-backed NSView that
+            // ALSO owns two layer-backed subviews (`content`, `panic`) —
+            // AppKit inserts each subview's own layer into `containerLayer`
+            // LAZILY (on the next display pass), not synchronously when
+            // `addSubview` runs. This raw layer is inserted synchronously,
+            // right now, via `insertSublayer(below:)` — but at THIS point
+            // `panicLayer` (if not yet synced by AppKit) may not actually be
+            // a member of `containerLayer.sublayers` yet, so the `below:`
+            // reference silently falls back to append-at-end. When AppKit
+            // later performs its own sync, it appends `content`'s and
+            // `panic`'s layers AFTER whatever is already there — burying
+            // this layer under `content`'s opaque black background,
+            // permanently invisible, no error anywhere (reproduced directly
+            // against a throwaway AppKit window while diagnosing D19: the
+            // final sublayers array came out [PROGRAM, CONTENT, PANIC] even
+            // though this call inserted PROGRAM "below" PANIC). zPosition
+            // sidesteps the whole timing question: CALayer paints by
+            // zPosition when set, regardless of array index. Ordinary panes
+            // (`content`) stay at the CALayer default, 0.
+            layer.zPosition = Self.programLayerZPosition
             if let panicLayer {
                 containerLayer.insertSublayer(layer, below: panicLayer)
             } else {
@@ -387,6 +450,16 @@ final class StageDisplayController {
         }
     }
 
+    /// D19: explicit stacking constants used both here and in
+    /// `syncProgramPanes` — see the long comment there for WHY array order
+    /// alone can't be trusted. Ordinary panes (the SwiftUI content view)
+    /// stay at the CALayer default, 0; program panes sit above them; PANIC
+    /// sits above everything. `internal`, not `private`, purely so a
+    /// regression test can assert against the real constants rather than a
+    /// duplicated magic number.
+    static let programLayerZPosition: CGFloat = 100
+    static let panicLayerZPosition: CGFloat = 1000
+
     /// Builds a PLAIN (non-flipped, standard AppKit y-up) container view
     /// hosting two SwiftUI layers — the ordinary panes (bottom) and an
     /// always-present panic overlay (top) — sized to `size`. The live
@@ -396,9 +469,20 @@ final class StageDisplayController {
     /// (rather than handing the program layer straight to the
     /// NSHostingView's own layer) keeps our raw CALayer out of SwiftUI's
     /// internally-managed layer tree entirely. Shared by both presentations
-    /// (D14) — only the enclosing window differs.
-    private static func makeContentContainer(size: CGSize, appModel: AppModel?) -> (container: NSView, panicLayer: CALayer?) {
+    /// (D14) — only the enclosing window differs. `internal`, not
+    /// `private`, so a test can construct one directly (no window shown) to
+    /// pin the D19 container-layer invariant below.
+    static func makeContentContainer(size: CGSize, appModel: AppModel?) -> (container: NSView, panicLayer: CALayer?) {
         let container = NSView(frame: CGRect(origin: .zero, size: size))
+        // D19 (suspect 1): MUST happen before anything else touches this
+        // view, and before this container is ever handed to
+        // `syncProgramPanes`. Setting `wantsLayer = true` synchronously
+        // materializes the backing CALayer — verified directly: the layer
+        // exists the instant this line runs, no window, no display pass, no
+        // async delay required. `syncProgramPanes`' registration guard
+        // depends entirely on that: without it, `container.layer` would be
+        // nil forever, and every program pane would silently register no
+        // external host, permanently, with no error anywhere.
         container.wantsLayer = true
 
         var panicLayer: CALayer?
@@ -410,11 +494,16 @@ final class StageDisplayController {
             )
             content.frame = container.bounds
             content.autoresizingMask = [.width, .height]
+            // Ordinary panes stay at the CALayer default zPosition (0) — the
+            // baseline every program pane (100) and PANIC (1000) stack above.
             container.addSubview(content)
 
             let panic = NSHostingView(rootView: StageDisplayPanicOverlay().environment(appModel))
             panic.frame = container.bounds
             panic.autoresizingMask = [.width, .height]
+            // D19 (suspect 2): explicit zPosition — see `syncProgramPanes`
+            // for why array order can't be trusted to keep this on top.
+            panic.layer?.zPosition = Self.panicLayerZPosition
             container.addSubview(panic)
             panicLayer = panic.layer
         }
