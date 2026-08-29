@@ -238,6 +238,13 @@ final class AppModel {
         provider.virtualCameraFeeding = { [weak self] in
             self?.virtualCamera.isFeeding ?? false
         }
+        // D11 (experimental) gesture GO: fire GO exactly as a bound key
+        // would, but never while editing — a magician rehearsing gestures
+        // in Show/Rehearsal wants this; someone editing the show does not.
+        provider.onGesture = { [weak self] in
+            guard let self, self.mode != .edit else { return }
+            self.triggerRouter.route(.go)
+        }
         virtualCamera.onWarning = { [weak self] message in
             self?.pushWarning(message)
         }

@@ -15,6 +15,9 @@ final class EnginePlayerProvider: CuePlayerProviding {
     /// True while the virtual webcam is feeding — groups flagged
     /// `virtualCamera` then mirror onto its monitor panel too.
     var virtualCameraFeeding: @MainActor () -> Bool = { false }
+    /// D11 (experimental): fires when a live camera cue's open-palm hold
+    /// completes. Wired by AppModel to a mode-gated GO — see `AppModel.wireEngines`.
+    var onGesture: (@MainActor () -> Void)?
 
     func armPlayer(for cue: Cue, showFolder: URL?) async throws -> MediaPlayback {
         switch cue.body {
@@ -54,10 +57,14 @@ final class EnginePlayerProvider: CuePlayerProviding {
             let targets = try resolveTargets(
                 groupID: body.outputGroupID, legacy: body.display, cueNumber: cue.number
             )
-            return try await CameraCuePlayer.arm(
+            let player = try await CameraCuePlayer.arm(
                 body: body, targets: targets,
                 dustEmitterURL: body.effects.dustEmitter?.resolve(showFolder: showFolder)
             )
+            player.onGesture = { [weak self] in
+                self?.onGesture?()
+            }
+            return player
 
         case .slide(let body):
             guard let url = body.media.resolve(showFolder: showFolder) else {

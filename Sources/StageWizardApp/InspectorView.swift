@@ -1336,6 +1336,14 @@ private struct CameraOutputSettings: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
+
+                Toggle("Open-palm GO (hold 1 s)", isOn: Binding(
+                    get: { camera.effects.gestureGo },
+                    set: { v in updateEffects { $0.gestureGo = v } }
+                ))
+                Text("Experimental — fires GO when an open palm is held to the camera for one second. Active in Show and Rehearsal modes.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
             .formStyle(.columns)
             .padding(12)

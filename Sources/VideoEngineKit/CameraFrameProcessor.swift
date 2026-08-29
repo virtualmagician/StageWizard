@@ -35,7 +35,19 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var chromaKeyColor = RGBAColor(red: 0, green: 1, blue: 0)
     private var chromaTolerance: Double = 0.35
     private var chromaSoftness: Double = 0.1
+    /// D11 (experimental): open-palm-hold GO. Reuses the SAME hand-pose
+    /// request as `handTrackingEnabled` (magic dust) — see `handPoseNeeded`
+    /// in `captureOutput` — but is otherwise an independent consumer.
+    private var gestureGoEnabled = false
     private var onFrame: (@Sendable (FrameProduct) -> Void)?
+    /// Fired once when the hold completes; queue-confined state
+    /// (`gestureHold`) drives it, but the callback itself hops to the
+    /// caller's actor of choice — `CameraCuePlayer` hops @MainActor.
+    private var onGesture: (@Sendable () -> Void)?
+    /// Pure hold/cooldown state machine for gesture GO — reset on every
+    /// `configure` call so a reconfigure never carries over a stale
+    /// in-progress hold or cooldown from before.
+    private var gestureHold = GestureHoldDetector()
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     /// Cube dimension for the chroma-key lattice — 64 per axis, per the D10 spec.
     private static let chromaCubeSize = 64
@@ -88,7 +100,9 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
         chromaKeyColor: RGBAColor,
         chromaTolerance: Double,
         chromaSoftness: Double,
-        onFrame: @escaping @Sendable (FrameProduct) -> Void
+        gestureGo: Bool,
+        onFrame: @escaping @Sendable (FrameProduct) -> Void,
+        onGesture: @escaping @Sendable () -> Void
     ) {
         queue.async {
             self.segmentationEnabled = segmentation
@@ -98,7 +112,13 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
             self.chromaKeyColor = chromaKeyColor
             self.chromaTolerance = min(max(chromaTolerance, 0), 1)
             self.chromaSoftness = min(max(chromaSoftness, 0), 1)
+            self.gestureGoEnabled = gestureGo
             self.onFrame = onFrame
+            self.onGesture = onGesture
+            // A reconfigure (effects toggled from the inspector, or an
+            // initial wire-up) always starts gesture tracking fresh — no
+            // stale in-progress hold or cooldown from before this call.
+            self.gestureHold = GestureHoldDetector()
         }
     }
 
@@ -107,13 +127,18 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard segmentationEnabled || handTrackingEnabled || chromaKeyEnabled,
+        guard segmentationEnabled || handTrackingEnabled || chromaKeyEnabled || gestureGoEnabled,
               let onFrame,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        // Gesture GO reuses the hand-pose request even when magic dust
+        // (`handTrackingEnabled`) itself is off — it's a second, independent
+        // consumer of the same Vision results.
+        let handPoseNeeded = handTrackingEnabled || gestureGoEnabled
+
         var requests: [VNRequest] = []
         if segmentationEnabled { requests.append(segmentationRequest) }
-        if handTrackingEnabled { requests.append(handRequest) }
+        if handPoseNeeded { requests.append(handRequest) }
         if !requests.isEmpty {
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
             try? handler.perform(requests)
@@ -164,6 +189,16 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
             }
         }
 
+        if gestureGoEnabled, let observations = handRequest.results {
+            let palmSeen = observations.prefix(2).contains { observation in
+                OpenPalmClassifier.isOpenPalm(joints: Self.jointPoints(from: observation))
+            }
+            let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+            if gestureHold.update(openPalmSeen: palmSeen, at: timestamp) {
+                onGesture?()
+            }
+        }
+
         // GPU→CPU readback; ~8 MB/frame at 1080p — fine on Apple Silicon.
         // If a future rig needs 4K here, switch to an IOSurface-backed
         // CVPixelBufferPool and hand layers the surface instead.
@@ -173,6 +208,21 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
             bufferSize: image.extent.size,
             hands: hands
         ))
+    }
+
+    // MARK: - Gesture GO
+
+    /// Extracts the joint dictionary `OpenPalmClassifier` needs from one
+    /// Vision hand observation. Joints Vision failed to recognize (or that
+    /// throw) are simply absent from the result — the classifier already
+    /// treats a missing joint as "not open".
+    private static func jointPoints(from observation: VNHumanHandPoseObservation) -> OpenPalmClassifier.HandJoints {
+        var joints = OpenPalmClassifier.HandJoints()
+        for name in OpenPalmClassifier.requiredJoints {
+            guard let point = try? observation.recognizedPoint(name) else { continue }
+            joints[name] = OpenPalmClassifier.JointPoint(location: point.location, confidence: point.confidence)
+        }
+        return joints
     }
 
     // MARK: - Chroma key

@@ -115,6 +115,10 @@ public final class CameraCuePlayer: MediaPlayback {
     private var thenStopTask: Task<Void, Never>?
 
     public var onFinished: (@MainActor (PlaybackEndReason) -> Void)?
+    /// D11 (experimental): fires once when `CameraFrameProcessor` reports an
+    /// open-palm hold completed. AppModel wires this (via
+    /// `EnginePlayerProvider`) to route a GO — see `wireProcessor`.
+    public var onGesture: (@MainActor () -> Void)?
 
     /// Single-display convenience (tests, legacy call sites).
     public static func arm(
@@ -286,12 +290,28 @@ public final class CameraCuePlayer: MediaPlayback {
             chromaKey: effects.chromaKey,
             chromaKeyColor: effects.chromaKeyColor,
             chromaTolerance: effects.chromaTolerance,
-            chromaSoftness: effects.chromaSoftness
-        ) { [weak self] product in
-            Task { @MainActor in
-                self?.showProcessedFrame(product)
+            chromaSoftness: effects.chromaSoftness,
+            gestureGo: effects.gestureGo,
+            onFrame: { [weak self] product in
+                Task { @MainActor in
+                    self?.showProcessedFrame(product)
+                }
+            },
+            onGesture: { [weak self] in
+                Task { @MainActor in
+                    self?.handleGesture()
+                }
             }
-        }
+        )
+    }
+
+    /// Subscriber-side hop off the capture queue (see `CameraFrameProcessor.onGesture`).
+    /// Re-checks live state before forwarding — a reconfigure or stop landing
+    /// between the processor firing and this Task running must not leak a
+    /// gesture from a dead/reconfigured player.
+    private func handleGesture() {
+        guard !stopped, effects.gestureGo else { return }
+        onGesture?()
     }
 
     private func showProcessedFrame(_ product: CameraFrameProcessor.FrameProduct) {
