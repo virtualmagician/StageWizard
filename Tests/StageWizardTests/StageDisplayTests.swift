@@ -275,6 +275,31 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(extra.count, 2)
     }
 
+    // MARK: - EnginePlayerProvider.floatingTarget (D14 floating-window group routing)
+
+    func testFloatingTargetReturnsPreviewWhenGroupFloats() {
+        let group = OutputGroup(name: "Prompter", floatingWindow: true)
+        var settings = ShowSettings()
+        settings.outputGroups = [group]
+        let target = EnginePlayerProvider.floatingTarget(groupID: group.id, settings: settings)
+        XCTAssertEqual(target, .preview(id: group.id, title: group.name))
+    }
+
+    func testFloatingTargetNilWhenGroupNotFloating() {
+        let group = OutputGroup(name: "Main", floatingWindow: false)
+        var settings = ShowSettings()
+        settings.outputGroups = [group]
+        XCTAssertNil(EnginePlayerProvider.floatingTarget(groupID: group.id, settings: settings))
+    }
+
+    func testFloatingTargetNilWhenGroupIDIsNil() {
+        XCTAssertNil(EnginePlayerProvider.floatingTarget(groupID: nil, settings: ShowSettings()))
+    }
+
+    func testFloatingTargetNilWhenGroupDeleted() {
+        XCTAssertNil(EnginePlayerProvider.floatingTarget(groupID: UUID(), settings: ShowSettings()))
+    }
+
     // MARK: - StageDisplayController.isActive (pure decision, no window)
 
     func testIsActiveFalseInEditModeEvenWhenEverythingElseQualifies() {
@@ -300,6 +325,23 @@ final class StageDisplayTests: XCTestCase {
     func testIsActiveFalseWhenNotEnabled() {
         let settings = StageDisplaySettings(enabled: false, display: someFingerprint())
         XCTAssertFalse(StageDisplayController.isActive(mode: .show, settings: settings, displayConnected: true))
+    }
+
+    // D14: Rehearsal's floating window needs no display at all — it doubles
+    // as a layout preview while rigging. Show mode still requires one.
+    func testIsActiveTrueInRehearsalModeWithNoDisplayChosen() {
+        let settings = StageDisplaySettings(enabled: true, display: nil)
+        XCTAssertTrue(StageDisplayController.isActive(mode: .rehearsal, settings: settings, displayConnected: false))
+    }
+
+    func testIsActiveFalseInShowModeWithNoDisplayChosen() {
+        let settings = StageDisplaySettings(enabled: true, display: nil)
+        XCTAssertFalse(StageDisplayController.isActive(mode: .show, settings: settings, displayConnected: false))
+    }
+
+    func testIsActiveFalseInRehearsalModeWhenNotEnabledEvenWithNoDisplay() {
+        let settings = StageDisplaySettings(enabled: false, display: nil)
+        XCTAssertFalse(StageDisplayController.isActive(mode: .rehearsal, settings: settings, displayConnected: false))
     }
 
     private func someFingerprint() -> DisplayFingerprint {

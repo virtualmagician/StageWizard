@@ -113,6 +113,42 @@ final class PreflightTests: XCTestCase {
         XCTAssertTrue(fed.isEmpty, "a fed virtual-cam output should be clean: \(fed)")
     }
 
+    // MARK: - D14: floating-window output groups skip the connectivity check
+
+    func testFloatingWindowGroupWithZeroDisplaysHasNoConnectivityError() {
+        let file = makeTempMediaFile(extension: "mov")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let group = OutputGroup(name: "Prompter", displays: [], floatingWindow: true)
+        var show = ShowFile()
+        show.settings.outputGroups = [group]
+        show.cues = [Cue(
+            number: "1",
+            body: .video(VideoBody(media: MediaReference(absolutePath: file.path), outputGroupID: group.id))
+        )]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "a floating-window group needs no display at all: \(issues)")
+    }
+
+    func testSameGroupWithoutFloatingWindowStillErrorsWithZeroDisplays() {
+        let file = makeTempMediaFile(extension: "mov")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let group = OutputGroup(name: "Prompter", displays: [], floatingWindow: false)
+        var show = ShowFile()
+        show.settings.outputGroups = [group]
+        show.cues = [Cue(
+            number: "1",
+            body: .video(VideoBody(media: MediaReference(absolutePath: file.path), outputGroupID: group.id))
+        )]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no assigned display is connected") ?? false)
+    }
+
     // MARK: - Broken cue bodies
 
     func testBrokenCueBodyIsError() {

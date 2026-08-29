@@ -11,16 +11,24 @@ public struct OutputGroup: Codable, Hashable, Sendable, Identifiable {
     /// Also mirror this output into the virtual webcam ("StageWizard
     /// Camera") when it's active.
     public var virtualCamera: Bool
+    /// D14: play into a floating, resizable window instead of the assigned
+    /// displays — in EVERY workspace mode (e.g. a prompter feed kept on the
+    /// operator's own screen during a real show). While true, `displays` is
+    /// ignored for routing purposes (still stored, so toggling back off
+    /// restores the prior assignment) and no display-connectivity check
+    /// applies — see `EngineBridge.floatingTarget` / `Preflight`.
+    public var floatingWindow: Bool
 
-    public init(id: UUID = UUID(), name: String, displays: [DisplayFingerprint] = [], virtualCamera: Bool = false) {
+    public init(id: UUID = UUID(), name: String, displays: [DisplayFingerprint] = [], virtualCamera: Bool = false, floatingWindow: Bool = false) {
         self.id = id
         self.name = name
         self.displays = displays
         self.virtualCamera = virtualCamera
+        self.floatingWindow = floatingWindow
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, displays, virtualCamera
+        case id, name, displays, virtualCamera, floatingWindow
     }
 
     public init(from decoder: Decoder) throws {
@@ -29,5 +37,6 @@ public struct OutputGroup: Codable, Hashable, Sendable, Identifiable {
         name = try c.decode(String.self, forKey: .name)
         displays = try c.decode([DisplayFingerprint].self, forKey: .displays)
         virtualCamera = try c.decodeIfPresent(Bool.self, forKey: .virtualCamera) ?? false
+        floatingWindow = try c.decodeIfPresent(Bool.self, forKey: .floatingWindow) ?? false
     }
 }

@@ -113,14 +113,18 @@ enum Preflight {
         // and (separately) whether its virtual-webcam feed is running.
         for groupID in armedOutputGroupIDs {
             guard let group = show.settings.group(withID: groupID) else { continue }
-            let hasConnectedDisplay = group.displays.contains { DisplayManager.shared.match($0) != nil }
-            let coveredByVirtualCam = group.virtualCamera && virtualCamFeeding
-            if !hasConnectedDisplay, !coveredByVirtualCam {
-                issues.append(PreflightIssue(
-                    cueNumber: nil,
-                    message: "Output '\(group.name)': no assigned display is connected",
-                    severity: .error
-                ))
+            // D14: a floating-window group needs neither a connected display
+            // nor the webcam feed — it always has somewhere to play.
+            if !group.floatingWindow {
+                let hasConnectedDisplay = group.displays.contains { DisplayManager.shared.match($0) != nil }
+                let coveredByVirtualCam = group.virtualCamera && virtualCamFeeding
+                if !hasConnectedDisplay, !coveredByVirtualCam {
+                    issues.append(PreflightIssue(
+                        cueNumber: nil,
+                        message: "Output '\(group.name)': no assigned display is connected",
+                        severity: .error
+                    ))
+                }
             }
             if group.virtualCamera, !virtualCamFeeding {
                 issues.append(PreflightIssue(

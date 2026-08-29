@@ -73,9 +73,12 @@ final class AppModel {
         guard newMode != mode else { return }
         transport.stopAll()
         if mode == .rehearsal {
-            OutputWindowManager.shared.closeAllPreviews(
-                keeping: virtualCamera.isFeeding ? [VirtualCameraManager.monitorPreviewID] : []
-            )
+            // D14: floating-window groups play into their preview window in
+            // EVERY mode, so their window must survive the switch instead of
+            // flashing closed and reopening at the next arm.
+            var keeping = Set(document.show.settings.outputGroups.filter(\.floatingWindow).map(\.id))
+            if virtualCamera.isFeeding { keeping.insert(VirtualCameraManager.monitorPreviewID) }
+            OutputWindowManager.shared.closeAllPreviews(keeping: keeping)
         }
         mode = newMode
         showModeEnteredAt = newMode == .show ? Date() : nil
@@ -500,7 +503,7 @@ final class AppModel {
         let settings = document.show.settings.stageDisplay
         let displayConnected = settings.display.flatMap { DisplayManager.shared.match($0) } != nil
         let active = StageDisplayController.isActive(mode: mode, settings: settings, displayConnected: displayConnected)
-        stageDisplayController.sync(settings: settings, active: active)
+        stageDisplayController.sync(settings: settings, active: active, mode: mode)
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

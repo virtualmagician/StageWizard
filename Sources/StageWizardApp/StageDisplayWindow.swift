@@ -13,10 +13,25 @@ private final class StageDisplayNSWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
-/// Owns the fullscreen performer-facing "confidence monitor" window — clock,
-/// show timer, standing-by cue + notes, running cues, and (D13) a live
-/// PROGRAM pane mirroring an output group. Reads transport state only; NEVER
-/// a cue target itself, so its own window never touches `OutputWindowManager`
+/// D14: the Rehearsal-mode presentation — floating, titled, resizable, like
+/// a rehearsal preview panel (see `OutputWindowManager.PreviewWindow`, which
+/// this deliberately does NOT reuse: the stage display is never leased
+/// through `OutputWindowManager`, same reasoning as `StageDisplayNSWindow`
+/// above being separate from `OutputWindow`). Only `canBecomeMain` is
+/// overridden — `becomesKeyOnlyIfNeeded` (set where this is constructed)
+/// keeps it from stealing focus on an ordinary click, matching the preview
+/// panel convention exactly.
+private final class StageDisplayFloatingWindow: NSPanel {
+    override var canBecomeMain: Bool { false }
+}
+
+/// Owns the performer-facing "confidence monitor" window — clock, show
+/// timer, standing-by cue + notes, running cues, and (D13) a live PROGRAM
+/// pane mirroring an output group. Show mode presents it borderless
+/// fullscreen on a chosen display; Rehearsal (D14) presents it as a
+/// floating, resizable window instead — no display required, so it doubles
+/// as a layout preview while rigging. Reads transport state only; NEVER a
+/// cue target itself, so its own window never touches `OutputWindowManager`
 /// — but the program pane's content layer IS registered there (as an
 /// EXTERNAL host, see `OutputWindowManager.registerExternalHost`) so video/
 /// camera/text/slide players can mirror onto it exactly like any other
@@ -40,8 +55,19 @@ final class StageDisplayController {
     /// self-before-fully-initialized ordering problem in AppModel.init).
     weak var appModel: AppModel?
 
+    /// D14: which of the two presentations is currently on screen — Show
+    /// mode is borderless-fullscreen pinned to a real display; Rehearsal is
+    /// a floating resizable panel that needs no display at all. Replaces the
+    /// pre-D14 `currentDisplayID` (fullscreen-only) so `sync` can tell
+    /// "already showing the right thing" apart from "must tear down and
+    /// re-present" in both cases, not just a display change.
+    private enum Presentation: Equatable {
+        case fullscreen(CGDirectDisplayID)
+        case floating
+    }
+
     private var window: NSWindow?
-    private var currentDisplayID: CGDirectDisplayID?
+    private var currentPresentation: Presentation?
     /// The program pane's live content layer, registered with
     /// `OutputWindowManager` while non-nil. A sibling of the SwiftUI
     /// content's layer, inserted directly BELOW the panic-overlay layer so
@@ -50,6 +76,15 @@ final class StageDisplayController {
     /// The always-present (usually invisible) panic-overlay layer, captured
     /// at window-creation time so the program layer can be inserted below it.
     private weak var panicLayer: CALayer?
+    /// D14: the floating window resizes freely (the fullscreen one never
+    /// does), so the manually-positioned `programHostLayer` needs to be told
+    /// to re-lay-out on every resize — this observes exactly that. Nil
+    /// whenever the floating presentation isn't the current one.
+    private var resizeObserver: NSObjectProtocol?
+    /// The settings passed to the most recent `sync` call — kept only so the
+    /// resize observer can recompute the program pane's frame without
+    /// threading settings through the notification closure.
+    private var lastSettings: StageDisplaySettings?
 
     /// True while the program pane is actively registered as an external
     /// host — i.e. the window is open AND the program pane is enabled.
@@ -59,23 +94,51 @@ final class StageDisplayController {
 
     /// Pure decision: should the stage display window be open right now?
     /// Factored out of `sync` so it's directly testable without creating
-    /// any window — edit mode is never active, and a chosen-but-offline
-    /// display is never active even with everything else enabled.
+    /// any window — edit mode is never active. D14: Rehearsal's floating
+    /// window needs no display at all (it doubles as a layout preview with
+    /// no rig attached), so only Show mode requires a matched, connected
+    /// display.
     static func isActive(mode: WorkspaceMode, settings: StageDisplaySettings, displayConnected: Bool) -> Bool {
-        (mode == .show || mode == .rehearsal) && settings.enabled && displayConnected
+        guard settings.enabled else { return false }
+        switch mode {
+        case .show: return displayConnected
+        case .rehearsal: return true
+        case .edit: return false
+        }
     }
 
-    /// Reconcile the window with the current settings and activity state.
-    /// `active` must already fold in mode + `settings.enabled` + display
-    /// connectivity (see `isActive`) — callers compute it once (AppModel's
-    /// `syncStageDisplay`) and pass it straight through.
-    func sync(settings: StageDisplaySettings, active: Bool) {
-        guard active, let fingerprint = settings.display,
-              let matched = DisplayManager.shared.match(fingerprint) else {
+    /// Reconcile the window with the current settings, activity state, and
+    /// mode. `active` must already fold in mode + `settings.enabled` +
+    /// display connectivity (see `isActive`) — callers compute it once
+    /// (AppModel's `syncStageDisplay`) and pass it straight through. `mode`
+    /// additionally picks WHICH presentation to show while active: Show is
+    /// borderless-fullscreen on the matched display, Rehearsal is a floating
+    /// resizable panel (D14).
+    func sync(settings: StageDisplaySettings, active: Bool, mode: WorkspaceMode) {
+        lastSettings = settings
+        guard active else {
             close()
             return
         }
-        if let window, currentDisplayID == matched.displayID {
+        switch mode {
+        case .show:
+            guard let fingerprint = settings.display,
+                  let matched = DisplayManager.shared.match(fingerprint) else {
+                close()
+                return
+            }
+            presentFullscreen(on: matched, settings: settings)
+        case .rehearsal:
+            presentFloating(settings: settings)
+        case .edit:
+            // Unreachable — `isActive` is false in edit mode — but never
+            // leave a stale window open if this is ever called anyway.
+            close()
+        }
+    }
+
+    private func presentFullscreen(on matched: ConnectedDisplay, settings: StageDisplaySettings) {
+        if let window, currentPresentation == .fullscreen(matched.displayID) {
             // Same display: re-assert the frame so a mode/resolution change
             // (reconfiguration storm) doesn't leave it mis-sized.
             window.setFrame(matched.screen.frame, display: true)
@@ -83,21 +146,71 @@ final class StageDisplayController {
             return
         }
         close()
-        let (newWindow, panic) = Self.makeWindow(screen: matched.screen, appModel: appModel)
+        let (newWindow, panic) = Self.makeFullscreenWindow(screen: matched.screen, appModel: appModel)
         window = newWindow
         panicLayer = panic
-        currentDisplayID = matched.displayID
+        currentPresentation = .fullscreen(matched.displayID)
+        syncProgramPane(settings: settings, in: newWindow)
+    }
+
+    private func presentFloating(settings: StageDisplaySettings) {
+        if let window, currentPresentation == .floating {
+            syncProgramPane(settings: settings, in: window)
+            return
+        }
+        close()
+        let (newWindow, panic) = Self.makeFloatingWindow(appModel: appModel)
+        window = newWindow
+        panicLayer = panic
+        currentPresentation = .floating
+        observeResize(of: newWindow)
         syncProgramPane(settings: settings, in: newWindow)
     }
 
     private func close() {
         guard let window else { return }
         teardownProgramPane()
+        stopObservingResize()
         window.orderOut(nil)
         window.close()
         self.window = nil
         self.panicLayer = nil
-        currentDisplayID = nil
+        currentPresentation = nil
+    }
+
+    /// D14: re-lay the program pane's host layer on every floating-window
+    /// resize — the fullscreen window never resizes by user action so this
+    /// is only ever wired up for the floating presentation (see
+    /// `presentFloating`/`stopObservingResize`). Mirrors the resize-tracking
+    /// idiom `VirtualCameraManager` already uses for its monitor panel: hop
+    /// to `@MainActor` explicitly since `NotificationCenter`'s closure
+    /// parameter is `@Sendable`, even though `queue: .main` guarantees this
+    /// always actually runs on the main thread.
+    private func observeResize(of window: NSWindow) {
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.repositionProgramPane()
+            }
+        }
+    }
+
+    private func stopObservingResize() {
+        if let resizeObserver {
+            NotificationCenter.default.removeObserver(resizeObserver)
+            self.resizeObserver = nil
+        }
+    }
+
+    private func repositionProgramPane() {
+        guard let programHostLayer, let window, let container = window.contentView,
+              let settings = lastSettings else { return }
+        let frame = StageDisplayGeometry.appKitFrame(for: settings.pane(.program).rect, in: container.bounds.size)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        programHostLayer.frame = frame
+        CATransaction.commit()
     }
 
     /// Register/reposition/retire the program pane's live content layer to
@@ -141,31 +254,18 @@ final class StageDisplayController {
         self.programHostLayer = nil
     }
 
-    /// Builds the window: a PLAIN (non-flipped, standard AppKit y-up)
-    /// container view hosting two SwiftUI layers — the ordinary panes
-    /// (bottom) and an always-present panic overlay (top) — with the live
-    /// program-pane layer inserted directly BETWEEN them once registered,
-    /// so PANIC always visually wins regardless of what's playing into the
-    /// program pane. Using a plain container (rather than handing the
-    /// program layer straight to the NSHostingView's own layer) keeps our
-    /// raw CALayer out of SwiftUI's internally-managed layer tree entirely.
-    private static func makeWindow(screen: NSScreen, appModel: AppModel?) -> (window: NSWindow, panicLayer: CALayer?) {
-        let window = StageDisplayNSWindow(
-            contentRect: screen.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-            screen: screen
-        )
-        window.level = windowLevel
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        window.isOpaque = true
-        window.backgroundColor = .black
-        window.ignoresMouseEvents = true
-        window.hasShadow = false
-        window.isReleasedWhenClosed = false
-
-        let container = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+    /// Builds a PLAIN (non-flipped, standard AppKit y-up) container view
+    /// hosting two SwiftUI layers — the ordinary panes (bottom) and an
+    /// always-present panic overlay (top) — sized to `size`. The live
+    /// program-pane layer is inserted directly BETWEEN them once registered
+    /// (see `syncProgramPane`), so PANIC always visually wins regardless of
+    /// what's playing into the program pane. Using a plain container
+    /// (rather than handing the program layer straight to the
+    /// NSHostingView's own layer) keeps our raw CALayer out of SwiftUI's
+    /// internally-managed layer tree entirely. Shared by both presentations
+    /// (D14) — only the enclosing window differs.
+    private static func makeContentContainer(size: CGSize, appModel: AppModel?) -> (container: NSView, panicLayer: CALayer?) {
+        let container = NSView(frame: CGRect(origin: .zero, size: size))
         container.wantsLayer = true
 
         var panicLayer: CALayer?
@@ -185,12 +285,72 @@ final class StageDisplayController {
             container.addSubview(panic)
             panicLayer = panic.layer
         }
+        return (container, panicLayer)
+    }
+
+    /// Show mode: borderless, non-activating, fullscreen on the matched display.
+    private static func makeFullscreenWindow(screen: NSScreen, appModel: AppModel?) -> (window: NSWindow, panicLayer: CALayer?) {
+        let window = StageDisplayNSWindow(
+            contentRect: screen.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        window.level = windowLevel
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.ignoresMouseEvents = true
+        window.hasShadow = false
+        window.isReleasedWhenClosed = false
+
+        let (container, panicLayer) = makeContentContainer(size: screen.frame.size, appModel: appModel)
         window.contentView = container
 
         // init(contentRect:screen:) interprets the rect relative to
         // `screen`; normalize to global coordinates like OutputWindowManager.
         window.setFrame(screen.frame, display: true)
         window.orderFrontRegardless()
+        return (window, panicLayer)
+    }
+
+    /// D14, Rehearsal mode: floating, titled, resizable — needs no display
+    /// at all, matching `OutputWindowManager.makePreviewWindow`'s panel
+    /// convention exactly (level, `isFloatingPanel`, `becomesKeyOnlyIfNeeded`,
+    /// `hidesOnDeactivate = false`, and — deliberately, like preview windows
+    /// — NO `.closable` in the style mask: the user can move/resize it but
+    /// not close it, so there's nothing to reopen or flip in settings; it
+    /// simply tracks `syncStageDisplay` like any other presentation).
+    private static func makeFloatingWindow(appModel: AppModel?) -> (window: NSWindow, panicLayer: CALayer?) {
+        let defaultFrame = CGRect(x: 120, y: 120, width: 720, height: 405)
+        let window = StageDisplayFloatingWindow(
+            contentRect: defaultFrame,
+            styleMask: [.titled, .resizable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Stage Display"
+        window.level = .floating
+        window.isFloatingPanel = true
+        window.becomesKeyOnlyIfNeeded = true
+        // Panels hide on app deactivate by default — like the rehearsal
+        // preview panels, this must stay visible while the operator works
+        // in other apps (e.g. checking notes in another window).
+        window.hidesOnDeactivate = false
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.hasShadow = true
+        window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: 320, height: 180)
+
+        let (container, panicLayer) = makeContentContainer(size: defaultFrame.size, appModel: appModel)
+        window.contentView = container
+
+        // Remember the operator's arrangement across sessions, exactly like
+        // a rehearsal preview panel's per-group autosave name.
+        window.setFrameAutosaveName("StageWizard.StageDisplay.rehearsal")
+        window.orderFront(nil)
         return (window, panicLayer)
     }
 }

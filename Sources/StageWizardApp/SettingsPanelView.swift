@@ -366,6 +366,27 @@ private struct GroupDetail: View {
             ))
             .help("Mirror this output into the “StageWizard Camera” that Zoom/Teams/OBS can use (activate it above).")
 
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Floating window", isOn: Binding(
+                    get: { group.floatingWindow },
+                    set: { v in
+                        update { $0.floatingWindow = v }
+                        // Routing stops immediately (EngineBridge checks the
+                        // flag on every arm) — close the now-orphaned window
+                        // rather than leave it pinned open with nothing left
+                        // to play into it. Turning it ON needs no window
+                        // action here: hostLayer(for:) opens it lazily the
+                        // next time a cue on this group arms.
+                        if !v { OutputWindowManager.shared.closePreview(id: groupID) }
+                    }
+                ))
+                if group.floatingWindow {
+                    Text("Plays in a floating, resizable window instead of fullscreen displays.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
             Section("Assigned displays — the same video mirrors onto all of them") {
                 // Connected displays as toggles.
                 ForEach(DisplayManager.shared.displays, id: \.displayID) { connected in
@@ -396,6 +417,8 @@ private struct GroupDetail: View {
                     }
                 }
             }
+            .disabled(group.floatingWindow)
+            .opacity(group.floatingWindow ? 0.4 : 1.0)
         }
         .formStyle(.grouped)
     }

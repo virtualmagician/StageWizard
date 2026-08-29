@@ -39,6 +39,28 @@ final class V8Tests: XCTestCase {
         XCTAssertTrue(decoded.settings.outputGroups[0].virtualCamera)
     }
 
+    // MARK: - D14: floating-window output groups
+
+    func testOutputGroupFloatingWindowDefaultsOffForOlderFiles() throws {
+        var show = ShowFile()
+        show.settings.outputGroups = [OutputGroup(name: "Prompter")]
+        var json = try JSONSerialization.jsonObject(with: show.encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        var groups = settings["outputGroups"] as! [[String: Any]]
+        groups[0].removeValue(forKey: "floatingWindow")
+        settings["outputGroups"] = groups
+        json["settings"] = settings
+        let decoded = try ShowFile.load(from: try JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(decoded.settings.outputGroups[0].floatingWindow)
+    }
+
+    func testOutputGroupFloatingWindowRoundTrip() throws {
+        var show = ShowFile()
+        show.settings.outputGroups = [OutputGroup(name: "Prompter", floatingWindow: true)]
+        let decoded = try ShowFile.load(from: show.encoded())
+        XCTAssertTrue(decoded.settings.outputGroups[0].floatingWindow)
+    }
+
     // MARK: - Virtual-webcam feed state in the show file
 
     func testVirtualCameraFeedRoundTripsAndDefaultsOff() throws {

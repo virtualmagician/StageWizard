@@ -100,14 +100,20 @@ final class EnginePlayerProvider: CuePlayerProviding {
         }
     }
 
-    /// Output resolution, in order: output group → legacy fingerprint → main
-    /// display. Groups may span several displays (mirrored output). A group
-    /// with NO connected member is a hard arm failure (never the wrong
-    /// screen); a partially connected group plays on what's there, loudly.
+    /// Output resolution, in order: floating-window group override → output
+    /// group → legacy fingerprint → main display. Groups may span several
+    /// displays (mirrored output). A group with NO connected member is a
+    /// hard arm failure (never the wrong screen); a partially connected
+    /// group plays on what's there, loudly.
     ///
     /// REHEARSAL: every cue maps to its group's floating preview window (one
     /// per group, plus one for "main display" cues), with no connectivity
     /// checks — that's the point: rehearse with no rig attached.
+    ///
+    /// D14: a group with `floatingWindow` set resolves to its own floating
+    /// preview window in EVERY mode (Show included) — checked first, before
+    /// the rehearsal branch, since rehearsal already resolves every group to
+    /// the same preview target anyway.
     private func resolveTargets(
         groupID: UUID?,
         legacy: DisplayFingerprint?,
@@ -119,6 +125,9 @@ final class EnginePlayerProvider: CuePlayerProviding {
             virtualCameraFeeding: virtualCameraFeeding(),
             stageDisplayProgramGroupID: stageDisplayProgramGroupID()
         )
+        if let floating = Self.floatingTarget(groupID: groupID, settings: settings()) {
+            return [floating] + extra
+        }
         if rehearsalActive() {
             if let groupID, let group = settings().group(withID: groupID) {
                 return [.preview(id: group.id, title: group.name)] + extra
@@ -164,6 +173,18 @@ final class EnginePlayerProvider: CuePlayerProviding {
             extra.append(StageDisplayController.programTarget)
         }
         return extra
+    }
+
+    /// D14: pure "should this group float, and if so where" decision —
+    /// factored out for direct unit testing exactly like `extraTargets`
+    /// above. A floating group's `displays` list is deliberately never
+    /// consulted here (and no `DisplayManager`/window state is touched) —
+    /// floating routing needs no connectivity at all.
+    static func floatingTarget(groupID: UUID?, settings: ShowSettings) -> OutputTarget? {
+        guard let groupID, let group = settings.group(withID: groupID), group.floatingWindow else {
+            return nil
+        }
+        return .preview(id: group.id, title: group.name)
     }
 
     private func resolveDisplayIDs(
