@@ -389,11 +389,15 @@ public struct CameraEffects: Codable, Hashable, Sendable {
     /// Width of the smoothstep falloff band straddling `chromaTolerance`,
     /// 0…1 — 0 is a hard cutoff, larger softens the edge.
     public var chromaSoftness: Double
-    /// Experimental (D11): fires GO when an open palm is held to the camera
+    /// Experimental (D11): fires GO when `goGesture` is held to the camera
     /// for ~1 s. Requires the Vision hand-pose request, so it counts toward
     /// `anyEnabled` (and activates the processed capture path) even when
     /// `magicDust` — the OTHER hand-pose consumer — is off.
     public var gestureGo: Bool
+    /// D15: which hand shape `gestureGo` waits for. Default `.openPalm` —
+    /// D11 only ever recognized an open palm, so an old file with
+    /// `gestureGo: true` and no `goGesture` key behaves exactly as before.
+    public var goGesture: HandGesture
 
     public init(
         segmentation: Bool = false,
@@ -405,7 +409,8 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         chromaKeyColor: RGBAColor = RGBAColor(red: 0, green: 1, blue: 0),
         chromaTolerance: Double = 0.35,
         chromaSoftness: Double = 0.1,
-        gestureGo: Bool = false
+        gestureGo: Bool = false,
+        goGesture: HandGesture = .openPalm
     ) {
         self.segmentation = segmentation
         self.magicDust = magicDust
@@ -417,13 +422,14 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         self.chromaTolerance = min(max(chromaTolerance, 0), 1)
         self.chromaSoftness = min(max(chromaSoftness, 0), 1)
         self.gestureGo = gestureGo
+        self.goGesture = goGesture
     }
 
     public var anyEnabled: Bool { segmentation || magicDust || chromaKey || gestureGo }
 
     private enum CodingKeys: String, CodingKey {
         case segmentation, magicDust, dustEmitter, dustPreset, dustScale
-        case chromaKey, chromaKeyColor, chromaTolerance, chromaSoftness, gestureGo
+        case chromaKey, chromaKeyColor, chromaTolerance, chromaSoftness, gestureGo, goGesture
     }
 
     public init(from decoder: Decoder) throws {
@@ -441,6 +447,9 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         chromaSoftness = min(max(try c.decodeIfPresent(Double.self, forKey: .chromaSoftness) ?? 0.1, 0), 1)
         // Pre-D11 files predate gesture GO; default off.
         gestureGo = try c.decodeIfPresent(Bool.self, forKey: .gestureGo) ?? false
+        // Pre-D15 files predate the gesture picker; D11 only ever recognized
+        // an open palm, so that's the default for every older file too.
+        goGesture = try c.decodeIfPresent(HandGesture.self, forKey: .goGesture) ?? .openPalm
     }
 }
 

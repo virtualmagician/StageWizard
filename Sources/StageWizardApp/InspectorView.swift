@@ -1337,11 +1337,22 @@ private struct CameraOutputSettings: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                Toggle("Open-palm GO (hold 1 s)", isOn: Binding(
+                Toggle("Gesture GO (hold 1 s)", isOn: Binding(
                     get: { camera.effects.gestureGo },
                     set: { v in updateEffects { $0.gestureGo = v } }
                 ))
-                Text("Experimental — fires GO when an open palm is held to the camera for one second. Active in Show and Rehearsal modes.")
+                if camera.effects.gestureGo {
+                    Picker("Gesture", selection: Binding(
+                        get: { camera.effects.goGesture },
+                        set: { g in updateEffects { $0.goGesture = g } }
+                    )) {
+                        ForEach(HandGesture.allCases, id: \.self) { gesture in
+                            Text(gesture.label).tag(gesture)
+                        }
+                    }
+                    .frame(maxWidth: 280)
+                }
+                Text("Experimental — fires GO when the chosen gesture is held to the camera for one second. Active in Show and Rehearsal modes.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

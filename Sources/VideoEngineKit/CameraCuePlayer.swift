@@ -115,10 +115,17 @@ public final class CameraCuePlayer: MediaPlayback {
     private var thenStopTask: Task<Void, Never>?
 
     public var onFinished: (@MainActor (PlaybackEndReason) -> Void)?
-    /// D11 (experimental): fires once when `CameraFrameProcessor` reports an
-    /// open-palm hold completed. AppModel wires this (via
+    /// D11 (experimental): fires once when `CameraFrameProcessor` reports a
+    /// gesture hold completed. AppModel wires this (via
     /// `EnginePlayerProvider`) to route a GO — see `wireProcessor`.
     public var onGesture: (@MainActor () -> Void)?
+    /// D15: fires with the live gesture-tracking readout for the stage
+    /// display's gesture pane. `nil` CLEARS it — sent explicitly when
+    /// `gestureGo` turns off via a live effects edit, and unconditionally
+    /// when this player stops (see `applyEffects`/`stop`), since the
+    /// processor itself only streams payloads while actively tracking and
+    /// has no way to know the whole player just tore down.
+    public var onGestureReadout: (@MainActor (GestureReadout?) -> Void)?
 
     /// Single-display convenience (tests, legacy call sites).
     public static func arm(
@@ -292,6 +299,7 @@ public final class CameraCuePlayer: MediaPlayback {
             chromaTolerance: effects.chromaTolerance,
             chromaSoftness: effects.chromaSoftness,
             gestureGo: effects.gestureGo,
+            goGesture: effects.goGesture,
             onFrame: { [weak self] product in
                 Task { @MainActor in
                     self?.showProcessedFrame(product)
@@ -300,6 +308,11 @@ public final class CameraCuePlayer: MediaPlayback {
             onGesture: { [weak self] in
                 Task { @MainActor in
                     self?.handleGesture()
+                }
+            },
+            onGestureReadout: { [weak self] readout in
+                Task { @MainActor in
+                    self?.handleGestureReadout(readout)
                 }
             }
         )
@@ -312,6 +325,14 @@ public final class CameraCuePlayer: MediaPlayback {
     private func handleGesture() {
         guard !stopped, effects.gestureGo else { return }
         onGesture?()
+    }
+
+    /// Subscriber-side hop for the D15 readout stream — same re-check as
+    /// `handleGesture`, so a readout in flight when the player stops or
+    /// disables gestureGo never lands after the explicit `nil` clear below.
+    private func handleGestureReadout(_ readout: GestureReadout) {
+        guard !stopped, effects.gestureGo else { return }
+        onGestureReadout?(readout)
     }
 
     private func showProcessedFrame(_ product: CameraFrameProcessor.FrameProduct) {
@@ -394,6 +415,12 @@ public final class CameraCuePlayer: MediaPlayback {
     /// processed is just layer visibility — the session keeps running.
     public func applyEffects(_ newEffects: CameraEffects, dustEmitterURL: URL?) {
         guard !stopped else { return }
+        if effects.gestureGo, !newEffects.gestureGo {
+            // Gesture tracking is turning off while the cue keeps running —
+            // the processor will simply stop streaming, so clear explicitly
+            // rather than leaving a stale readout on the stage display.
+            onGestureReadout?(nil)
+        }
         effects = newEffects
         self.dustEmitterURL = dustEmitterURL
         wireProcessor()
@@ -485,6 +512,7 @@ public final class CameraCuePlayer: MediaPlayback {
     public func stop() {
         guard !stopped else { return }
         stopped = true
+        onGestureReadout?(nil)
         thenStopTask?.cancel()
         CATransaction.begin()
         CATransaction.setDisableActions(true)

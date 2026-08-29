@@ -20,9 +20,14 @@ final class EnginePlayerProvider: CuePlayerProviding {
     /// program pane isn't enabled (see `StageDisplayController.isProgramPaneShowing`).
     /// Wired by AppModel, same shape as `virtualCameraFeeding`.
     var stageDisplayProgramGroupID: @MainActor () -> UUID? = { nil }
-    /// D11 (experimental): fires when a live camera cue's open-palm hold
+    /// D11 (experimental): fires when a live camera cue's gesture hold
     /// completes. Wired by AppModel to a mode-gated GO — see `AppModel.wireEngines`.
     var onGesture: (@MainActor () -> Void)?
+    /// D15: fires with a camera cue's live gesture readout for the stage
+    /// display's gesture pane — the cue id identifies WHICH cue it came
+    /// from (so a stopping cue never clears a different cue's readout);
+    /// `nil` clears it. Wired by AppModel — see `AppModel.gestureReadout`.
+    var onGestureReadout: (@MainActor (UUID, GestureReadout?) -> Void)?
 
     func armPlayer(for cue: Cue, showFolder: URL?) async throws -> MediaPlayback {
         switch cue.body {
@@ -68,6 +73,9 @@ final class EnginePlayerProvider: CuePlayerProviding {
             )
             player.onGesture = { [weak self] in
                 self?.onGesture?()
+            }
+            player.onGestureReadout = { [weak self] readout in
+                self?.onGestureReadout?(cue.id, readout)
             }
             return player
 

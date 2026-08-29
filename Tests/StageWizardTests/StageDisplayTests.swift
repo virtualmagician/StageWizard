@@ -25,6 +25,7 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertTrue(settings.pane(.notes).enabled)
         XCTAssertTrue(settings.pane(.running).enabled)
         XCTAssertFalse(settings.pane(.program).enabled, "program view is off by default — no group chosen yet")
+        XCTAssertFalse(settings.pane(.gesture).enabled, "D15 gesture pane is off by default — experimental")
     }
 
     func testShowSettingsDefaultsIncludeStageDisplay() {
@@ -52,6 +53,7 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertTrue(decoded.settings.stageDisplay.pane(.notes).enabled)
         XCTAssertTrue(decoded.settings.stageDisplay.pane(.running).enabled)
         XCTAssertFalse(decoded.settings.stageDisplay.pane(.program).enabled, "program view is brand new — off by default")
+        XCTAssertFalse(decoded.settings.stageDisplay.pane(.gesture).enabled, "gesture pane is brand new — off by default")
     }
 
     func testStageDisplayLegacyBooleanKeysMigrateIntoPaneEnabledFlags() throws {
@@ -79,6 +81,7 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertFalse(s.pane(.notes).enabled)
         XCTAssertTrue(s.pane(.running).enabled)
         XCTAssertFalse(s.pane(.program).enabled, "brand new in D13 — off by default even migrating an old file")
+        XCTAssertFalse(s.pane(.gesture).enabled, "brand new in D15 — off by default even migrating an old file")
     }
 
     func testStageDisplayObjectWithNoLegacyKeysAndNoPanesKeyDefaultsAllPanes() throws {
@@ -97,6 +100,7 @@ final class StageDisplayTests: XCTestCase {
             XCTAssertTrue(s.pane(kind).enabled, "\(kind) defaults to enabled")
         }
         XCTAssertFalse(s.pane(.program).enabled)
+        XCTAssertFalse(s.pane(.gesture).enabled)
     }
 
     func testStageDisplayPartialPanesArrayFillsInMissingKinds() throws {
@@ -119,6 +123,66 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertTrue(s.pane(.showTimer).enabled, "missing kind filled in with its default")
         XCTAssertEqual(s.pane(.showTimer).rect, StageDisplayPane.defaultRect(for: .showTimer))
         XCTAssertFalse(s.pane(.program).enabled)
+        XCTAssertFalse(s.pane(.gesture).enabled, "missing kind filled in with its (disabled) default")
+        XCTAssertEqual(s.pane(.gesture).rect, StageDisplayPane.defaultRect(for: .gesture))
+    }
+
+    // MARK: - D15: gesture pane kind
+
+    func testGesturePaneKindIsPartOfAllCases() {
+        XCTAssertTrue(StageDisplayPaneKind.allCases.contains(.gesture))
+    }
+
+    func testGesturePaneDefaultsToDisabled() {
+        XCTAssertFalse(StageDisplayPane.defaultEnabled(for: .gesture))
+    }
+
+    func testGesturePaneDefaultRectIsOnScreenAndAboveMinimumSize() {
+        let rect = StageDisplayPane.defaultRect(for: .gesture)
+        XCTAssertEqual(rect, StageRect(x: 0.02, y: 0.52, width: 0.30, height: 0.18))
+        XCTAssertGreaterThanOrEqual(rect.width, StageDisplayPane.minimumSize.width)
+        XCTAssertGreaterThanOrEqual(rect.height, StageDisplayPane.minimumSize.height)
+    }
+
+    /// Simulates a genuinely pre-D15 `panes` array — every OTHER kind
+    /// present and explicitly enabled, `gesture` entirely absent (it did
+    /// not exist yet) — the exact shape `fillingMissing` exists to repair.
+    func testPreD15PanesArrayFillsInGestureAsDisabledAtItsDefaultRect() throws {
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        let preD15Kinds: [StageDisplayPaneKind] = [.clock, .showTimer, .standingBy, .notes, .running, .program]
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": preD15Kinds.map { kind in
+                ["kind": kind.rawValue, "enabled": true, "rect": ["x": 0.0, "y": 0.0, "width": 0.2, "height": 0.1]]
+            },
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        let s = decoded.settings.stageDisplay
+        XCTAssertEqual(s.panes.count, StageDisplayPaneKind.allCases.count, "gesture filled in — one entry per kind")
+        XCTAssertFalse(s.pane(.gesture).enabled, "brand new kind — never present in the old array, so its default (off) applies")
+        XCTAssertEqual(s.pane(.gesture).rect, StageDisplayPane.defaultRect(for: .gesture))
+        // Every pre-existing kind keeps what the old file actually said.
+        for kind in preD15Kinds {
+            XCTAssertTrue(s.pane(kind).enabled, "\(kind) keeps its explicit pre-D15 value")
+        }
+    }
+
+    func testGesturePaneRoundTripsThroughShowFileWhenEnabled() throws {
+        var show = ShowFile()
+        var settings = StageDisplaySettings()
+        if let idx = settings.panes.firstIndex(where: { $0.kind == .gesture }) {
+            settings.panes[idx].enabled = true
+            settings.panes[idx].rect = StageRect(x: 0.05, y: 0.6, width: 0.25, height: 0.2)
+        }
+        show.settings.stageDisplay = settings
+
+        let decoded = try ShowFile.load(from: show.encoded())
+        XCTAssertTrue(decoded.settings.stageDisplay.pane(.gesture).enabled)
+        XCTAssertEqual(decoded.settings.stageDisplay.pane(.gesture).rect, StageRect(x: 0.05, y: 0.6, width: 0.25, height: 0.2))
     }
 
     func testStageDisplayPaneRectClampsOutOfRangeAndTooSmallOnDecode() throws {

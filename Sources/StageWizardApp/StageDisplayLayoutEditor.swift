@@ -11,6 +11,7 @@ extension StageDisplayPaneKind {
         case .notes: "Notes"
         case .running: "Running cues"
         case .program: "Program"
+        case .gesture: "Gesture"
         }
     }
 }

@@ -35,6 +35,14 @@ final class AppModel {
     /// Recent operator-facing warnings (broken media, missing devices…).
     private(set) var warnings: [OperatorWarning] = []
 
+    /// D15: live gesture-GO readout for the stage display's gesture pane —
+    /// nil when no running camera cue currently has gesture GO enabled.
+    private(set) var gestureReadout: GestureReadout?
+    /// Which camera cue's readout `gestureReadout` currently reflects —
+    /// guards against a stopping cue clearing a DIFFERENT cue's readout
+    /// that has since taken over (see `EnginePlayerProvider.onGestureReadout`).
+    private var gestureReadoutCueID: UUID?
+
     /// Recently opened shows (File → Open Recent), mirrored from
     /// NSDocumentController so the SwiftUI menu can observe changes.
     private(set) var recentShows: [URL] = []
@@ -274,6 +282,19 @@ final class AppModel {
         provider.onGesture = { [weak self] in
             guard let self, self.mode != .edit else { return }
             self.triggerRouter.route(.go)
+        }
+        // D15: the stage display's gesture pane mirrors whichever camera
+        // cue most recently reported a readout; a nil clear only wins if it
+        // came from the cue currently on display (see the type's own doc).
+        provider.onGestureReadout = { [weak self] cueID, readout in
+            guard let self else { return }
+            if let readout {
+                self.gestureReadout = readout
+                self.gestureReadoutCueID = cueID
+            } else if self.gestureReadoutCueID == cueID {
+                self.gestureReadout = nil
+                self.gestureReadoutCueID = nil
+            }
         }
         virtualCamera.onWarning = { [weak self] message in
             self?.pushWarning(message)

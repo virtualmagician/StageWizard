@@ -126,13 +126,15 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     ]
 }
 
-/// The six things the stage display can show. Order here is the STABLE
+/// The seven things the stage display can show. Order here is the STABLE
 /// order used everywhere panes are enumerated (settings UI, layout editor,
 /// `StageDisplaySettings.panes` after migration/fill-in) — changing it
 /// changes nothing functionally (each pane is looked up by kind) but keeps
-/// lists/checklists from reordering across app versions.
+/// lists/checklists from reordering across app versions. `gesture` (D15) is
+/// appended at the end for exactly that reason — older show files simply
+/// don't have it yet, and `StageDisplayPane.fillingMissing` fills it in.
 public enum StageDisplayPaneKind: String, Codable, CaseIterable, Sendable {
-    case clock, showTimer, standingBy, notes, running, program
+    case clock, showTimer, standingBy, notes, running, program, gesture
 }
 
 /// One region of the stage display: whether it's shown, and where — in
@@ -181,7 +183,7 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         return StageRect(x: x, y: y, width: width, height: height)
     }
 
-    /// Default position/size per pane — chosen so all six fit the 16:9
+    /// Default position/size per pane — chosen so all seven fit the 16:9
     /// stage without overlapping badly out of the box; the operator
     /// rearranges from there in the layout editor.
     public static func defaultRect(for kind: StageDisplayPaneKind) -> StageRect {
@@ -192,14 +194,19 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         case .notes: StageRect(x: 0.10, y: 0.55, width: 0.80, height: 0.15)
         case .running: StageRect(x: 0.02, y: 0.72, width: 0.96, height: 0.26)
         case .program: StageRect(x: 0.62, y: 0.52, width: 0.36, height: 0.18)
+        case .gesture: StageRect(x: 0.02, y: 0.52, width: 0.30, height: 0.18)
         }
     }
 
-    /// Every pane starts enabled EXCEPT the program view — it targets no
-    /// output group until the operator picks one, so showing it by default
-    /// would just be a black box.
+    /// Every pane starts enabled EXCEPT the program view (targets no output
+    /// group until the operator picks one — showing it by default would
+    /// just be a black box) and the D15 gesture pane (experimental, and
+    /// meaningless until a camera cue has gesture GO enabled).
     public static func defaultEnabled(for kind: StageDisplayPaneKind) -> Bool {
-        kind != .program
+        switch kind {
+        case .program, .gesture: false
+        default: true
+        }
     }
 
     /// One pane per kind, in `StageDisplayPaneKind.allCases` order, at
@@ -305,6 +312,7 @@ public struct StageDisplaySettings: Codable, Hashable, Sendable {
                 case .notes: enabled = showsNotes
                 case .running: enabled = showsRunning
                 case .program: enabled = StageDisplayPane.defaultEnabled(for: .program)
+                case .gesture: enabled = StageDisplayPane.defaultEnabled(for: .gesture)
                 }
                 return StageDisplayPane(kind: kind, enabled: enabled, rect: StageDisplayPane.defaultRect(for: kind))
             }

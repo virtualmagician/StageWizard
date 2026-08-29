@@ -425,6 +425,7 @@ struct StageDisplayContentView: View {
         case .notes: notesPane(size: size)
         case .running: runningPane(size: size)
         case .program: programPane(size: size)
+        case .gesture: gesturePane(size: size)
         }
     }
 
@@ -545,6 +546,63 @@ struct StageDisplayContentView: View {
         }
         .frame(width: size.width, height: size.height)
         .clipped()
+    }
+
+    // MARK: Gesture (D15) — live gesture-GO readout: the pre-warm timer.
+
+    /// `app.gestureReadout` already arrives throttled to ~10 Hz from the
+    /// capture pipeline (see `CameraFrameProcessor.deliverReadoutIfDue`), so
+    /// this pane reads it directly (like `standingByPane`/`notesPane`)
+    /// rather than driving its own `TimelineView` tick.
+    @ViewBuilder
+    private func gesturePane(size: CGSize) -> some View {
+        if let readout = app.gestureReadout {
+            VStack(alignment: .leading, spacing: size.height * 0.06) {
+                HStack(spacing: size.width * 0.05) {
+                    Image(systemName: readout.goGesture.symbolName)
+                        .font(.system(size: size.height * 0.30, weight: .semibold))
+                    Text(readout.goGesture.label.uppercased())
+                        .font(.system(size: size.height * 0.13, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                    Spacer(minLength: 0)
+                }
+                GeometryReader { barGeo in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Color.white.opacity(0.15))
+                        Rectangle()
+                            .fill(Theme.accent)
+                            .frame(width: barGeo.size.width * readout.holdProgress)
+                    }
+                }
+                .frame(height: max(3, size.height * 0.09))
+                .clipShape(Capsule())
+                HStack(spacing: size.width * 0.05) {
+                    if readout.cooldownRemaining > 0 {
+                        Text(String(format: "COOLDOWN %.1f s", readout.cooldownRemaining))
+                            .font(.system(size: size.height * 0.11, design: .monospaced))
+                            .foregroundStyle(.gray)
+                    }
+                    let others = readout.detected.filter { $0 != readout.goGesture }
+                    ForEach(others, id: \.self) { gesture in
+                        Image(systemName: gesture.symbolName)
+                            .font(.system(size: size.height * 0.13))
+                            .foregroundStyle(.gray)
+                    }
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+        } else {
+            ZStack {
+                Text("GESTURE")
+                    .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundStyle(.white.opacity(0.15))
+            }
+            .frame(width: size.width, height: size.height)
+            .clipped()
+        }
     }
 }
 

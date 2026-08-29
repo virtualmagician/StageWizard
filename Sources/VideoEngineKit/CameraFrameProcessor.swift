@@ -3,6 +3,32 @@ import Vision
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
+/// D15: one throttled sample of the gesture-GO pipeline's live state —
+/// everything the stage display's gesture pane needs to render a pre-warm
+/// timer: which gestures are visible in the current frame, which one
+/// `gestureGo` is actually waiting on, how far along its hold is toward
+/// firing, and how long until a new hold may start. Value type — hops
+/// MainActor at the subscriber like every other per-frame product
+/// (`CameraFrameProcessor.FrameProduct`/`onGesture`).
+public struct GestureReadout: Sendable, Equatable {
+    /// The gesture `gestureGo` is configured to wait on (`CameraEffects.goGesture`).
+    public var goGesture: HandGesture
+    /// Every gesture recognized in the current frame (may include `goGesture`
+    /// itself, plus any others detected alongside it).
+    public var detected: [HandGesture]
+    /// 0…1 toward the 1 s hold of `goGesture`; 0 while idle or cooling down.
+    public var holdProgress: Double
+    /// Seconds remaining before a new hold may start; 0 when ready.
+    public var cooldownRemaining: Double
+
+    public init(goGesture: HandGesture, detected: [HandGesture], holdProgress: Double, cooldownRemaining: Double) {
+        self.goGesture = goGesture
+        self.detected = detected
+        self.holdProgress = holdProgress
+        self.cooldownRemaining = cooldownRemaining
+    }
+}
+
 /// Per-frame processing for camera effects: Vision person segmentation
 /// (background → transparent) and hand-pose tracking (for magic-dust
 /// emitters). Lives entirely OFF the main actor: every mutable property is
@@ -35,19 +61,33 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var chromaKeyColor = RGBAColor(red: 0, green: 1, blue: 0)
     private var chromaTolerance: Double = 0.35
     private var chromaSoftness: Double = 0.1
-    /// D11 (experimental): open-palm-hold GO. Reuses the SAME hand-pose
+    /// D11 (experimental): gesture-hold GO. Reuses the SAME hand-pose
     /// request as `handTrackingEnabled` (magic dust) — see `handPoseNeeded`
     /// in `captureOutput` — but is otherwise an independent consumer.
     private var gestureGoEnabled = false
+    /// D15: which hand shape `gestureGoEnabled` waits for.
+    private var goGesture: HandGesture = .openPalm
     private var onFrame: (@Sendable (FrameProduct) -> Void)?
     /// Fired once when the hold completes; queue-confined state
     /// (`gestureHold`) drives it, but the callback itself hops to the
     /// caller's actor of choice — `CameraCuePlayer` hops @MainActor.
     private var onGesture: (@Sendable () -> Void)?
+    /// D15: fired with the live readout (throttled to ~10 Hz, only on
+    /// change) for the stage display's gesture pane — same subscriber-hop
+    /// contract as `onGesture`.
+    private var onGestureReadout: (@Sendable (GestureReadout) -> Void)?
     /// Pure hold/cooldown state machine for gesture GO — reset on every
     /// `configure` call so a reconfigure never carries over a stale
     /// in-progress hold or cooldown from before.
     private var gestureHold = GestureHoldDetector()
+    /// Dedup cache for `onGestureReadout` delivery — reset on every
+    /// `configure` call alongside `gestureHold` so a reconfigure (including
+    /// `gestureGo` toggling off) always starts the next enable clean rather
+    /// than comparing against a stale readout from before.
+    private var lastDeliveredReadout: GestureReadout?
+    /// PTS of the last delivered readout — throttles delivery to ~10 Hz.
+    private var lastReadoutSentAt: TimeInterval?
+    private static let readoutMinInterval: TimeInterval = 0.1   // ~10 Hz
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     /// Cube dimension for the chroma-key lattice — 64 per axis, per the D10 spec.
     private static let chromaCubeSize = 64
@@ -101,8 +141,10 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
         chromaTolerance: Double,
         chromaSoftness: Double,
         gestureGo: Bool,
+        goGesture: HandGesture,
         onFrame: @escaping @Sendable (FrameProduct) -> Void,
-        onGesture: @escaping @Sendable () -> Void
+        onGesture: @escaping @Sendable () -> Void,
+        onGestureReadout: @escaping @Sendable (GestureReadout) -> Void
     ) {
         queue.async {
             self.segmentationEnabled = segmentation
@@ -113,12 +155,18 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
             self.chromaTolerance = min(max(chromaTolerance, 0), 1)
             self.chromaSoftness = min(max(chromaSoftness, 0), 1)
             self.gestureGoEnabled = gestureGo
+            self.goGesture = goGesture
             self.onFrame = onFrame
             self.onGesture = onGesture
+            self.onGestureReadout = onGestureReadout
             // A reconfigure (effects toggled from the inspector, or an
             // initial wire-up) always starts gesture tracking fresh — no
-            // stale in-progress hold or cooldown from before this call.
+            // stale in-progress hold/cooldown, and no stale dedup cache that
+            // could suppress the first readout after gestureGo/goGesture
+            // changes.
             self.gestureHold = GestureHoldDetector()
+            self.lastDeliveredReadout = nil
+            self.lastReadoutSentAt = nil
         }
     }
 
@@ -190,13 +238,23 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
 
         if gestureGoEnabled, let observations = handRequest.results {
-            let palmSeen = observations.prefix(2).contains { observation in
-                OpenPalmClassifier.isOpenPalm(joints: Self.jointPoints(from: observation))
-            }
+            let hands = observations.prefix(2).map { Self.jointPoints(from: $0) }
+            let detected = GestureClassifier.classify(hands: Array(hands))
+            let goSeen = detected.contains(goGesture)
             let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
-            if gestureHold.update(openPalmSeen: palmSeen, at: timestamp) {
+            let hold = gestureHold.update(gestureSeen: goSeen, at: timestamp)
+            if hold.fired {
                 onGesture?()
             }
+            deliverReadoutIfDue(
+                GestureReadout(
+                    goGesture: goGesture,
+                    detected: HandGesture.allCases.filter(detected.contains),
+                    holdProgress: hold.holdProgress,
+                    cooldownRemaining: hold.cooldownRemaining
+                ),
+                at: timestamp
+            )
         }
 
         // GPU→CPU readback; ~8 MB/frame at 1080p — fine on Apple Silicon.
@@ -212,17 +270,29 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     // MARK: - Gesture GO
 
-    /// Extracts the joint dictionary `OpenPalmClassifier` needs from one
+    /// Extracts the joint dictionary `GestureClassifier` needs from one
     /// Vision hand observation. Joints Vision failed to recognize (or that
-    /// throw) are simply absent from the result — the classifier already
-    /// treats a missing joint as "not open".
-    private static func jointPoints(from observation: VNHumanHandPoseObservation) -> OpenPalmClassifier.HandJoints {
-        var joints = OpenPalmClassifier.HandJoints()
-        for name in OpenPalmClassifier.requiredJoints {
+    /// throw) are simply absent from the result — every classifier already
+    /// treats a missing joint as "not matched".
+    private static func jointPoints(from observation: VNHumanHandPoseObservation) -> GestureClassifier.HandJoints {
+        var joints = GestureClassifier.HandJoints()
+        for name in GestureClassifier.requiredJoints {
             guard let point = try? observation.recognizedPoint(name) else { continue }
-            joints[name] = OpenPalmClassifier.JointPoint(location: point.location, confidence: point.confidence)
+            joints[name] = GestureClassifier.JointPoint(location: point.location, confidence: point.confidence)
         }
         return joints
+    }
+
+    /// Delivers `readout` to `onGestureReadout` only when both throttle
+    /// conditions hold: at least `readoutMinInterval` has elapsed since the
+    /// last delivery (~10 Hz), AND the value actually changed — a gesture
+    /// held perfectly still for seconds shouldn't spam identical payloads.
+    private func deliverReadoutIfDue(_ readout: GestureReadout, at time: TimeInterval) {
+        let due = lastReadoutSentAt.map { time - $0 >= Self.readoutMinInterval } ?? true
+        guard due, readout != lastDeliveredReadout else { return }
+        lastDeliveredReadout = readout
+        lastReadoutSentAt = time
+        onGestureReadout?(readout)
     }
 
     // MARK: - Chroma key
