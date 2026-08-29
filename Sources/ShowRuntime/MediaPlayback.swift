@@ -16,8 +16,16 @@ public enum PlaybackEndReason: Sendable {
 @MainActor
 public protocol MediaPlayback: AnyObject {
     /// Effective duration of a single pass between trim points, if known.
+    /// WALL-CLOCK seconds — for AudioCuePlayer/VideoCuePlayer (adjustable
+    /// playback rate via AudioBody/VideoBody.rate) this is the media-time
+    /// pass length ÷ rate, not the raw media duration.
     var duration: TimeInterval? { get }
-    /// Current position within the media file (media time, not wall clock).
+    /// Position within the trimmed pass, anchored at the cue body's
+    /// `startTime` exactly like `duration` is anchored at 0 — i.e.
+    /// `currentTime - startTime` is a WALL-CLOCK elapsed value comparable to
+    /// `duration` (see CueInstance.elapsed/duration, which do exactly that
+    /// subtraction). Players with a fixed 1x rate already satisfy this
+    /// trivially; AudioCuePlayer/VideoCuePlayer divide by rate to keep it true.
     var currentTime: TimeInterval { get }
     var isPaused: Bool { get }
     /// Current live level, dB. Fades read this as their starting point.

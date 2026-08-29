@@ -37,6 +37,11 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
     private let cueVolumeDB: Double
     private let fadeInDuration: TimeInterval
     private let fadeOutDuration: TimeInterval
+    /// Playback speed multiplier (0.25…4) applied via the checked-out node's
+    /// varispeed unit. `duration`/`currentTime` below report WALL-CLOCK
+    /// seconds (media seconds ÷ rate) so progress UIs stay correct without
+    /// any other changes; scheduling/trim math (source frames) is untouched.
+    private let rate: Double
 
     /// Set when the cue's saved output device wasn't connected at arm time and
     /// playback fell back to the system default output.
@@ -92,6 +97,9 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
             deviceName: body.outputDeviceName
         )
         let node = try deviceEngine.checkoutNode()
+        // Tape-style rate change: pitch shifts with speed. Intentional — see
+        // AudioBody.rate.
+        deviceEngine.varispeed(for: node)?.rate = Float(body.rate)
 
         let player = AudioCuePlayer(
             file: file,
@@ -126,6 +134,7 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
         self.cueVolumeDB = body.volumeDB
         self.fadeInDuration = max(0, body.fadeInDuration)
         self.fadeOutDuration = max(0, body.fadeOutDuration)
+        self.rate = body.rate
         self.routingWarning = routingWarning
         self.frozenElapsedPlayed = 0
         // Authored fade-in arms at silence; otherwise arm at cue volume.
@@ -134,15 +143,20 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
 
     // MARK: - MediaPlayback: introspection
 
-    /// Duration of a single pass between the trim points.
+    /// Wall-clock duration of a single pass between the trim points
+    /// (media-time pass duration ÷ rate).
     public var duration: TimeInterval? {
-        passDuration
+        passDuration / rate
     }
 
-    /// Media time within the file: trim offset + position inside the current
-    /// loop pass (elapsed playback folded by the pass length).
+    /// Trim offset + wall-clock position inside the current loop pass
+    /// (elapsed playback folded by the wall-clock pass length, then ÷ rate).
+    /// Reported in WALL-CLOCK terms — not literally the file's media time
+    /// when rate ≠ 1 — so `currentTime - AudioBody.startTime` (both anchored
+    /// at the same trim offset) yields a wall-clock elapsed value comparable
+    /// to `duration` with zero changes at call sites (see CueInstance.elapsed).
     public var currentTime: TimeInterval {
-        mediaTime(forElapsed: elapsedPlayedSeconds)
+        wallClockTime(forElapsed: elapsedPlayedSeconds)
     }
 
     /// Live level in dB, derived from the node's (thread-safe) volume so it
@@ -180,12 +194,16 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
         return max(0, Double(playerTime.sampleTime) / playerTime.sampleRate)
     }
 
-    private func mediaTime(forElapsed elapsed: TimeInterval) -> TimeInterval {
-        guard passDuration > 0 else { return trimStartSeconds }
+    /// `elapsed` is elapsedPlayedSeconds — MEDIA seconds actually rendered
+    /// (unaffected by rate; the player node's own clock). Converts to a
+    /// wall-clock position by folding on the WALL-CLOCK pass length.
+    private func wallClockTime(forElapsed elapsed: TimeInterval) -> TimeInterval {
+        let wallPassDuration = passDuration / rate
+        guard wallPassDuration > 0 else { return trimStartSeconds }
         if let planned = plannedPlaybackSeconds, elapsed >= planned {
-            return trimStartSeconds + passDuration // clamp at the out point
+            return trimStartSeconds + wallPassDuration // clamp at the out point
         }
-        return trimStartSeconds + elapsed.truncatingRemainder(dividingBy: passDuration)
+        return trimStartSeconds + (elapsed / rate).truncatingRemainder(dividingBy: wallPassDuration)
     }
 
     // MARK: - MediaPlayback: transport
@@ -357,13 +375,15 @@ public final class AudioCuePlayer: MediaPlayback, AudioEngineClient {
         fadeOutTask = nil
         guard fadeOutDuration > 0, started, !finished, !isPaused,
               let planned = plannedPlaybackSeconds else { return }
-        let delay = planned - fadeOutDuration - elapsedPlayedSeconds
+        // planned/elapsedPlayedSeconds are MEDIA seconds; ÷ rate for the
+        // WALL-CLOCK sleep. fadeOutDuration is already wall-clock, as authored.
+        let delay = (planned / rate) - fadeOutDuration - (elapsedPlayedSeconds / rate)
         fadeOutTask = Task { [weak self] in
             if delay > 0 {
                 try? await Task.sleep(for: .seconds(delay))
             }
             guard !Task.isCancelled, let self, self.started, !self.finished, !self.isPaused else { return }
-            let remaining = max(0, (self.plannedPlaybackSeconds ?? 0) - self.elapsedPlayedSeconds)
+            let remaining = max(0, ((self.plannedPlaybackSeconds ?? 0) / self.rate) - (self.elapsedPlayedSeconds / self.rate))
             self.runFade(
                 toDB: silenceFloorDB,
                 duration: min(self.fadeOutDuration, remaining),

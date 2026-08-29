@@ -374,6 +374,29 @@ private struct MediaTimingForm: View {
                     )
                     Toggle("Loop forever", isOn: mediaBinding(\.infiniteLoop) { $0.infiniteLoop = $1 })
                 }
+                HStack(spacing: 8) {
+                    Text("Rate")
+                    TextField(
+                        "1.00",
+                        value: mediaBinding(\.rate) { $0.rate = clampedRate($1) },
+                        format: .number.precision(.fractionLength(2))
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 60)
+                    .multilineTextAlignment(.trailing)
+                    Stepper(
+                        "",
+                        value: mediaBinding(\.rate) { $0.rate = clampedRate($1) },
+                        in: 0.25...4,
+                        step: 0.25
+                    )
+                    .labelsHidden()
+                    Text("×")
+                        .foregroundStyle(.secondary)
+                }
+                Text("0.25–4× · audio pitch shifts with rate")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 if case .video(let video) = cue.body {
                     Picker("At end", selection: Binding(
                         get: { video.endBehavior },
@@ -437,18 +460,23 @@ private struct MediaTimingForm: View {
         var volumeDB: Double
         var fadeInDuration: TimeInterval
         var fadeOutDuration: TimeInterval
+        var rate: Double
     }
+
+    private func clampedRate(_ value: Double) -> Double { min(max(value, 0.25), 4) }
 
     private func mediaValues(_ cue: Cue) -> MediaValues? {
         switch cue.body {
         case .audio(let b):
             MediaValues(startTime: b.startTime, endTime: b.endTime, playCount: b.playCount,
                         infiniteLoop: b.infiniteLoop, volumeDB: b.volumeDB,
-                        fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration)
+                        fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration,
+                        rate: b.rate)
         case .video(let b):
             MediaValues(startTime: b.startTime, endTime: b.endTime, playCount: b.playCount,
                         infiniteLoop: b.infiniteLoop, volumeDB: b.volumeDB,
-                        fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration)
+                        fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration,
+                        rate: b.rate)
         default:
             nil
         }
@@ -493,7 +521,7 @@ private struct MediaTimingForm: View {
                 guard let cue = document.cue(withID: cueID), let values = mediaValues(cue) else {
                     return get(MediaValues(
                         startTime: 0, endTime: nil, playCount: 1, infiniteLoop: false,
-                        volumeDB: 0, fadeInDuration: 0, fadeOutDuration: 0
+                        volumeDB: 0, fadeInDuration: 0, fadeOutDuration: 0, rate: 1
                     ))
                 }
                 return get(values)
@@ -511,29 +539,34 @@ private struct MediaTimingForm: View {
         var volumeDB: Double
         var fadeInDuration: TimeInterval
         var fadeOutDuration: TimeInterval
+        var rate: Double
 
         init(audio b: AudioBody) {
             startTime = b.startTime; endTime = b.endTime; playCount = b.playCount
             infiniteLoop = b.infiniteLoop; volumeDB = b.volumeDB
             fadeInDuration = b.fadeInDuration; fadeOutDuration = b.fadeOutDuration
+            rate = b.rate
         }
 
         init(video b: VideoBody) {
             startTime = b.startTime; endTime = b.endTime; playCount = b.playCount
             infiniteLoop = b.infiniteLoop; volumeDB = b.volumeDB
             fadeInDuration = b.fadeInDuration; fadeOutDuration = b.fadeOutDuration
+            rate = b.rate
         }
 
         func apply(to b: inout AudioBody) {
             b.startTime = startTime; b.endTime = endTime; b.playCount = playCount
             b.infiniteLoop = infiniteLoop; b.volumeDB = volumeDB
             b.fadeInDuration = fadeInDuration; b.fadeOutDuration = fadeOutDuration
+            b.rate = rate
         }
 
         func apply(to b: inout VideoBody) {
             b.startTime = startTime; b.endTime = endTime; b.playCount = playCount
             b.infiniteLoop = infiniteLoop; b.volumeDB = volumeDB
             b.fadeInDuration = fadeInDuration; b.fadeOutDuration = fadeOutDuration
+            b.rate = rate
         }
     }
 }

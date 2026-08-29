@@ -32,9 +32,11 @@ final class DurationCache {
     func effectiveDuration(of cue: Cue, in show: ShowFile, showFolder: URL?) -> TimeInterval? {
         switch cue.body {
         case .audio(let body):
-            return trimmed(media: body.media, start: body.startTime, end: body.endTime, showFolder: showFolder)
+            let trimmedSeconds = trimmed(media: body.media, start: body.startTime, end: body.endTime, showFolder: showFolder)
+            return trimmedSeconds.map { Self.wallClock($0, rate: body.rate) }
         case .video(let body):
-            return trimmed(media: body.media, start: body.startTime, end: body.endTime, showFolder: showFolder)
+            let trimmedSeconds = trimmed(media: body.media, start: body.startTime, end: body.endTime, showFolder: showFolder)
+            return trimmedSeconds.map { Self.wallClock($0, rate: body.rate) }
         case .fade(let body):
             return body.duration
         case .stop(let body):
@@ -62,5 +64,12 @@ final class DurationCache {
         guard let url = media.resolve(showFolder: showFolder),
               let full = duration(for: url) else { return nil }
         return max(0, full - start)
+    }
+
+    /// Media-time seconds → wall-clock seconds for the Duration column, so
+    /// e.g. a 10s trim at 2× rate shows 5s. Pure helper, kept static so it's
+    /// directly testable without a resolvable media file.
+    static func wallClock(_ mediaSeconds: TimeInterval, rate: Double) -> TimeInterval {
+        mediaSeconds / rate
     }
 }

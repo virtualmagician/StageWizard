@@ -72,6 +72,11 @@ public final class VideoCuePlayer: MediaPlayback {
     private let playCount: Int
     private let infiniteLoop: Bool
     private let wantsLooping: Bool
+    /// Playback speed multiplier (0.25…4), applied to the AVPlayer's own
+    /// rate. `duration`/`currentTime` below report WALL-CLOCK seconds (asset
+    /// seconds ÷ rate) so progress UIs stay correct with no other changes;
+    /// end/loop detection is asset-time and stays untouched.
+    private let rate: Double
 
     private let volumeBox: VolumeLevelBox
     private var loopObservation: NSKeyValueObservation?
@@ -169,6 +174,7 @@ public final class VideoCuePlayer: MediaPlayback {
         self.playCount = max(1, body.playCount)
         self.infiniteLoop = body.infiniteLoop
         self.wantsLooping = body.infiniteLoop || body.playCount > 1
+        self.rate = body.rate
         self.volumeBox = VolumeLevelBox(body.volumeDB)
 
         let startCM = CMTime(seconds: start, preferredTimescale: 600)
@@ -276,7 +282,7 @@ public final class VideoCuePlayer: MediaPlayback {
         // Preroll so GO is decode-warm. A false result is non-fatal (some
         // configurations refuse preroll); playback still starts, just colder.
         _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            player.preroll(atRate: 1) { finished in
+            player.preroll(atRate: Float(rate)) { finished in
                 continuation.resume(returning: finished)
             }
         }
@@ -328,11 +334,17 @@ public final class VideoCuePlayer: MediaPlayback {
 
     // MARK: - MediaPlayback
 
-    /// Trimmed single-pass duration.
-    public var duration: TimeInterval? { passEnd - passStart }
+    /// Trimmed single-pass duration, in WALL-CLOCK seconds (asset seconds ÷ rate).
+    public var duration: TimeInterval? { (passEnd - passStart) / rate }
 
-    /// Position within the media file (media time, not wall clock).
-    public var currentTime: TimeInterval { player.currentTime().seconds }
+    /// Trim offset + wall-clock position within the current pass (the
+    /// AVPlayer's own asset-time position, converted to wall-clock so it's
+    /// directly comparable to `duration` — see CueInstance.elapsed, which
+    /// subtracts VideoBody.startTime, the same trim anchor, to recover the
+    /// wall-clock elapsed value with no other call-site changes).
+    public var currentTime: TimeInterval {
+        passStart + (player.currentTime().seconds - passStart) / rate
+    }
 
     public var isPaused: Bool { pausedFlag }
 
@@ -348,7 +360,7 @@ public final class VideoCuePlayer: MediaPlayback {
             volumeBox.value = silenceFloorDB
             player.volume = 0
         }
-        player.playImmediately(atRate: 1)
+        player.playImmediately(atRate: Float(rate))
         if fadeInDuration > 0 {
             animateOpacity(to: 1, duration: fadeInDuration)
             rampVolume(fromDB: silenceFloorDB, toDB: authoredVolumeDB,
@@ -370,7 +382,7 @@ public final class VideoCuePlayer: MediaPlayback {
     public func resume() {
         guard started, !stopped, pausedFlag else { return }
         pausedFlag = false
-        player.playImmediately(atRate: 1)
+        player.playImmediately(atRate: Float(rate))
         scheduleAuthoredFadeOutIfNeeded() // re-anchor to the new remaining time
     }
 
@@ -670,8 +682,12 @@ public final class VideoCuePlayer: MediaPlayback {
         fadeOutTask?.cancel()
         fadeOutTask = nil
         guard fadeOutDuration > 0, started, !stopped, !finishedNaturally, !pausedFlag, !loopingActive else { return }
-        let remaining = passEnd - player.currentTime().seconds
-        guard remaining > 0.01 else { return }
+        let remainingMedia = passEnd - player.currentTime().seconds
+        guard remainingMedia > 0.01 else { return }
+        // The player advances asset-time at `rate`; convert the media-time
+        // remainder to wall-clock so the sleep/ramp land at the out-point
+        // regardless of rate. fadeOutDuration itself stays wall-clock, as authored.
+        let remaining = remainingMedia / rate
         let delay = max(0, remaining - fadeOutDuration)
         let rampDuration = min(fadeOutDuration, remaining)
         fadeOutTask = Task { @MainActor [weak self] in

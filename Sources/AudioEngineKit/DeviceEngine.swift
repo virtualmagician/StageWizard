@@ -56,6 +56,10 @@ public final class DeviceEngine {
     private var pool: [AVAudioPlayerNode] = []
     /// Every node of the current generation (identity check for checkin).
     private var allNodes: [AVAudioPlayerNode] = []
+    /// Each player node's dedicated varispeed unit (player → varispeed →
+    /// mixer), keyed by node identity so checkoutNode()'s return type and
+    /// existing call sites stay unchanged. Rebuilt alongside the pool.
+    private var varispeedUnits: [ObjectIdentifier: AVAudioUnitVarispeed] = [:]
 
     private struct WeakClient {
         weak var client: AudioEngineClient?
@@ -113,7 +117,14 @@ public final class DeviceEngine {
         guard allNodes.contains(where: { $0 === node }),
               !pool.contains(where: { $0 === node }) else { return }
         node.stop() // clears any residual scheduled events; safe when stopped
+        varispeedUnits[ObjectIdentifier(node)]?.rate = 1
         pool.append(node)
+    }
+
+    /// The varispeed unit permanently wired downstream of `node`
+    /// (player → varispeed → mixer). Callers set `.rate` at arm time.
+    func varispeed(for node: AVAudioPlayerNode) -> AVAudioUnitVarispeed? {
+        varispeedUnits[ObjectIdentifier(node)]
     }
 
     func ensureRunning() throws {
@@ -152,12 +163,21 @@ public final class DeviceEngine {
         // Accessing mainMixerNode auto-wires mixer → output at the HW format.
         let mixer = engine.mainMixerNode
         var nodes: [AVAudioPlayerNode] = []
+        var varispeeds: [ObjectIdentifier: AVAudioUnitVarispeed] = [:]
         nodes.reserveCapacity(Self.playerPoolSize)
         for _ in 0..<Self.playerPoolSize {
             let node = AVAudioPlayerNode()
+            // Every node is permanently wired through its own varispeed unit
+            // (player → varispeed → mixer) so per-cue playback rate can be
+            // set without ever attaching/detaching nodes mid-show. Default
+            // rate 1 is a no-op pass-through.
+            let varispeed = AVAudioUnitVarispeed()
             engine.attach(node)
-            engine.connect(node, to: mixer, fromBus: 0, toBus: mixer.nextAvailableInputBus, format: connectionFormat)
+            engine.attach(varispeed)
+            engine.connect(node, to: varispeed, format: connectionFormat)
+            engine.connect(varispeed, to: mixer, fromBus: 0, toBus: mixer.nextAvailableInputBus, format: connectionFormat)
             nodes.append(node)
+            varispeeds[ObjectIdentifier(node)] = varispeed
         }
         mixer.outputVolume = savedMasterVolume
 
@@ -171,6 +191,7 @@ public final class DeviceEngine {
         self.engine = engine
         self.allNodes = nodes
         self.pool = nodes
+        self.varispeedUnits = varispeeds
         observeConfigurationChanges(of: engine)
     }
 
@@ -199,6 +220,7 @@ public final class DeviceEngine {
         // Invalidate the old generation first so late checkins become no-ops.
         allNodes = []
         pool = []
+        varispeedUnits = [:]
 
         for client in activeClients {
             client.audioEngineDidInvalidate()

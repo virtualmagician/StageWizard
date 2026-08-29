@@ -148,6 +148,9 @@ public struct AudioBody: Codable, Hashable, Sendable {
     public var outputDeviceUID: String?
     /// Human-readable device name for the UI when the UID doesn't resolve.
     public var outputDeviceName: String?
+    /// Playback speed multiplier, 0.25…4 (1 = normal). Applied via
+    /// AVAudioUnitVarispeed, which is tape-style — pitch shifts with rate.
+    public var rate: Double
 
     public init(
         media: MediaReference,
@@ -159,7 +162,8 @@ public struct AudioBody: Codable, Hashable, Sendable {
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
         outputDeviceUID: String? = nil,
-        outputDeviceName: String? = nil
+        outputDeviceName: String? = nil,
+        rate: Double = 1
     ) {
         self.media = media
         self.startTime = startTime
@@ -171,6 +175,28 @@ public struct AudioBody: Codable, Hashable, Sendable {
         self.fadeOutDuration = fadeOutDuration
         self.outputDeviceUID = outputDeviceUID
         self.outputDeviceName = outputDeviceName
+        self.rate = min(max(rate, 0.25), 4)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case media, startTime, endTime, playCount, infiniteLoop, volumeDB
+        case fadeInDuration, fadeOutDuration, outputDeviceUID, outputDeviceName, rate
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        media = try c.decode(MediaReference.self, forKey: .media)
+        startTime = try c.decode(TimeInterval.self, forKey: .startTime)
+        endTime = try c.decodeIfPresent(TimeInterval.self, forKey: .endTime)
+        playCount = try c.decode(Int.self, forKey: .playCount)
+        infiniteLoop = try c.decode(Bool.self, forKey: .infiniteLoop)
+        volumeDB = try c.decode(Double.self, forKey: .volumeDB)
+        fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
+        fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
+        outputDeviceUID = try c.decodeIfPresent(String.self, forKey: .outputDeviceUID)
+        outputDeviceName = try c.decodeIfPresent(String.self, forKey: .outputDeviceName)
+        // Pre-D3 files predate rate; default to normal speed.
+        rate = min(max(try c.decodeIfPresent(Double.self, forKey: .rate) ?? 1, 0.25), 4)
     }
 }
 
@@ -247,6 +273,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
     /// Render order on the output, 1 (background) … 10 (front).
     /// Equal layers stack by start order, like before layers existed.
     public var layer: Int
+    /// Playback speed multiplier, 0.25…4 (1 = normal).
+    public var rate: Double
 
     public init(
         media: MediaReference,
@@ -264,7 +292,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
         endBehavior: VideoEndBehavior = .stopAndUnload,
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
-        layer: Int = 5
+        layer: Int = 5,
+        rate: Double = 1
     ) {
         self.media = media
         self.startTime = startTime
@@ -282,12 +311,13 @@ public struct VideoBody: Codable, Hashable, Sendable {
         self.fadeInDuration = fadeInDuration
         self.fadeOutDuration = fadeOutDuration
         self.layer = layer.clampedToLayerRange
+        self.rate = min(max(rate, 0.25), 4)
     }
 
     private enum CodingKeys: String, CodingKey {
         case media, startTime, endTime, playCount, infiniteLoop, volumeDB
         case audioDeviceUID, audioDeviceName, display, outputGroupID
-        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration, layer
+        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration, layer, rate
     }
 
     public init(from decoder: Decoder) throws {
@@ -309,6 +339,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
         fadeInDuration = try c.decode(TimeInterval.self, forKey: .fadeInDuration)
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
         layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
+        // Pre-D3 files predate rate; default to normal speed.
+        rate = min(max(try c.decodeIfPresent(Double.self, forKey: .rate) ?? 1, 0.25), 4)
     }
 }
 
