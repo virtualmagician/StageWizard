@@ -91,6 +91,7 @@ struct TransportSidebar: View {
             VStack(spacing: 10) {
                 goButton
                 transportCluster
+                showTimer
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -163,6 +164,35 @@ struct TransportSidebar: View {
         .controlSize(.large)
         .tint(app.isShowMode ? Theme.panic : Theme.accent)
         .frame(maxWidth: .infinity)
+    }
+
+    /// Elapsed time since Show mode was entered — ticks live, resettable for
+    /// intermissions. Only meaningful (and only shown) while the show is live.
+    @ViewBuilder
+    private var showTimer: some View {
+        if app.mode == .show, let startedAt = app.showModeEnteredAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                HStack(spacing: 6) {
+                    Text(Self.elapsed(from: startedAt, to: context.date))
+                        .monospacedDigit()
+                    Button {
+                        app.resetShowTimer()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Reset show timer")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+        }
+    }
+
+    private static func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return String(format: "%02d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
     }
 
     private var panicButton: some View {

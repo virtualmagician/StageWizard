@@ -42,6 +42,17 @@ final class AppModel {
     /// editable: its whole point is adjusting the show against previews.
     var isShowMode: Bool { mode == .show }
 
+    /// When the workspace last entered Show mode; nil outside Show mode.
+    /// Drives the masthead's elapsed-time readout.
+    private(set) var showModeEnteredAt: Date?
+
+    /// Restart the show timer from now — for an intermission or a restart
+    /// mid-run. No-op outside Show mode.
+    func resetShowTimer() {
+        guard mode == .show else { return }
+        showModeEnteredAt = Date()
+    }
+
     /// Switch workspace mode. Stops all playback first (cues must re-arm
     /// against the new routing), opens/closes rehearsal previews, and — for
     /// user-initiated switches — records the mode in the show file.
@@ -54,6 +65,7 @@ final class AppModel {
             )
         }
         mode = newMode
+        showModeEnteredAt = newMode == .show ? Date() : nil
         if newMode == .rehearsal {
             openRehearsalPreviews()
         }
@@ -61,9 +73,26 @@ final class AppModel {
             // Pre-show check: surface permission problems BEFORE the first GO.
             checkPermissionsForCurrentShow()
         }
+        if newMode == .show {
+            runPreflightWarning()
+        }
         if persist, document.show.settings.workspaceMode != newMode {
             document.mutate { $0.settings.workspaceMode = newMode }
         }
+    }
+
+    /// Preflight on entering Show mode — a quiet banner, not a blocking sheet;
+    /// the operator opens Settings → General → Preflight for the full list.
+    private func runPreflightWarning() {
+        let issues = Preflight.run(
+            show: document.show,
+            showFolder: document.showFolder,
+            cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
+            virtualCamFeeding: virtualCamera.isFeeding,
+            connectedDevices: AudioDeviceManager.shared.outputDevices
+        )
+        guard issues.contains(where: { $0.severity == .error }) else { return }
+        pushWarning("Preflight: \(issues.count) issue\(issues.count == 1 ? "" : "s") — open Settings → General → Preflight for details")
     }
 
     /// One floating preview per assigned video output — so the operator can

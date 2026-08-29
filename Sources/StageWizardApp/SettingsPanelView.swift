@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Workspace settings, opened from the gear toolbar button.
@@ -59,6 +60,9 @@ struct SettingsPanelView: View {
 
 private struct GeneralSettingsTab: View {
     @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
+    @State private var preflightIssues: [PreflightIssue] = []
+    @State private var showPreflightSheet = false
 
     var body: some View {
         Form {
@@ -80,8 +84,30 @@ private struct GeneralSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+            HStack {
+                Button("Preflight…") {
+                    preflightIssues = runPreflight()
+                    showPreflightSheet = true
+                }
+                Text("Check media, outputs, and permissions before the show.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showPreflightSheet) {
+            PreflightResultsView(issues: preflightIssues)
+        }
+    }
+
+    private func runPreflight() -> [PreflightIssue] {
+        Preflight.run(
+            show: document.show,
+            showFolder: document.showFolder,
+            cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
+            virtualCamFeeding: app.virtualCamera.isFeeding,
+            connectedDevices: AudioDeviceManager.shared.outputDevices
+        )
     }
 }
 
