@@ -38,7 +38,7 @@ extension StageDisplayPane {
         var rect = base
         rect.x = base.x + offset
         rect.y = base.y + offset
-        return clamped(rect)
+        return clamped(rect, lockToSquare: true)
     }
 }
 
@@ -143,7 +143,8 @@ struct StageDisplayLayoutEditor: View {
             change(&s.panes[idx])
             // Read-then-write as SEPARATE statements (never `a[i].x = f(a[i])`
             // in one line — Swift exclusivity trap; see CLAUDE.md).
-            let clampedRect = StageDisplayPane.clamped(s.panes[idx].rect)
+            let isProgram = s.panes[idx].kind == .program
+            let clampedRect = StageDisplayPane.clamped(s.panes[idx].rect, lockToSquare: isProgram)
             s.panes[idx].rect = clampedRect
         }
     }
@@ -158,25 +159,131 @@ struct StageDisplayLayoutEditor: View {
     }
 }
 
-/// The 16:9 canvas: black background, one `PaneBox` per ENABLED pane.
+/// The 16:9 canvas: black background, one `PaneBox` per ENABLED pane, plus
+/// (D20) momentary alignment guide lines while any box is being dragged.
 private struct LayoutCanvas: View {
     let panes: [StageDisplayPane]
     let label: (StageDisplayPane) -> String
     let onRectChanged: (String, StageRect) -> Void
+
+    /// D20: raised by whichever `PaneBox` is currently mid-drag, consumed by
+    /// `SnapGuideLines` below it — lives HERE (not inside a single `PaneBox`)
+    /// because the guide lines must be drawn ABOVE every box, spanning the
+    /// whole canvas, not clipped to the dragging box's own small frame.
+    @State private var activeGuides: [LayoutSnapping.Guide] = []
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 Color.black
                 ForEach(panes.filter(\.enabled)) { pane in
-                    PaneBox(pane: pane, label: label(pane), canvasSize: geo.size) { newRect in
-                        onRectChanged(pane.id, newRect)
-                    }
+                    PaneBox(
+                        pane: pane,
+                        label: label(pane),
+                        canvasSize: geo.size,
+                        others: Self.canvasFrames(for: panes, excluding: pane.id, canvasSize: geo.size),
+                        onChange: { newRect in onRectChanged(pane.id, newRect) },
+                        onGuidesChanged: { guides in activeGuides = guides }
+                    )
                 }
+                SnapGuideLines(guides: activeGuides, canvasSize: geo.size)
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .clipped()
         }
+    }
+
+    /// Every OTHER enabled pane's frame, in canvas-space points — the
+    /// snap targets for the pane identified by `id`.
+    private static func canvasFrames(for panes: [StageDisplayPane], excluding id: String, canvasSize: CGSize) -> [CGRect] {
+        panes.filter { $0.enabled && $0.id != id }.map { PaneBox.canvasFrame(for: $0.rect, canvasSize: canvasSize) }
+    }
+}
+
+/// D20: momentary accent hairlines drawn across the whole canvas while a
+/// drag/resize snap is engaged — purely visual feedback, never hit-tested.
+private struct SnapGuideLines: View {
+    let guides: [LayoutSnapping.Guide]
+    let canvasSize: CGSize
+
+    var body: some View {
+        ForEach(Array(guides.enumerated()), id: \.offset) { _, guide in
+            switch guide {
+            case .vertical(let x):
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(width: 1, height: canvasSize.height)
+                    .position(x: x, y: canvasSize.height / 2)
+            case .horizontal(let y):
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(width: canvasSize.width, height: 1)
+                    .position(x: canvasSize.width / 2, y: y)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// D20: pure snap-resolution for the layout editor's drag/resize gestures.
+/// Operates entirely in CANVAS-SPACE POINTS — the same coordinate space
+/// `PaneBox.frame`/`LayoutCanvas`'s `GeometryReader` use, NOT the normalized
+/// 0...1 `StageRect` space the model stores — because `tolerance` is a fixed
+/// point distance (~6pt) that would be meaningless normalized.
+///
+/// Snaps `rect` to whichever of the canvas edges, the canvas center lines, or
+/// `others`' edges/centers is CLOSEST on each axis independently, translating
+/// `rect` along that axis by the found offset. Passing a pane's own full
+/// canvas frame implements a MOVE snap (every edge moves together, since
+/// translating preserves width/height). Passing a single dragged corner as a
+/// ZERO-SIZE point rect implements a RESIZE-edge snap: only that corner
+/// "moves" (minX == midX == maxX for a point, so exactly one coordinate is
+/// checked), and the caller reconstructs the final box from the snapped
+/// point plus the resize's fixed anchor corner — see `PaneBox.resizeDrag`.
+/// Pure and directly testable — no view/gesture state involved.
+enum LayoutSnapping {
+    /// One momentary alignment guide line, in canvas-space points.
+    enum Guide: Hashable {
+        case vertical(CGFloat)     // an x position — draw a full-height line there
+        case horizontal(CGFloat)   // a y position — draw a full-width line there
+    }
+
+    static func snap(rect: CGRect, others: [CGRect], canvas: CGSize, tolerance: CGFloat) -> (rect: CGRect, guides: [Guide]) {
+        var xCandidates: [CGFloat] = [0, canvas.width / 2, canvas.width]
+        var yCandidates: [CGFloat] = [0, canvas.height / 2, canvas.height]
+        for other in others {
+            xCandidates.append(contentsOf: [other.minX, other.midX, other.maxX])
+            yCandidates.append(contentsOf: [other.minY, other.midY, other.maxY])
+        }
+
+        var result = rect
+        var guides: [Guide] = []
+
+        if let (offset, line) = closestSnap(edges: [rect.minX, rect.midX, rect.maxX], candidates: xCandidates, tolerance: tolerance) {
+            result.origin.x += offset
+            guides.append(.vertical(line))
+        }
+        if let (offset, line) = closestSnap(edges: [rect.minY, rect.midY, rect.maxY], candidates: yCandidates, tolerance: tolerance) {
+            result.origin.y += offset
+            guides.append(.horizontal(line))
+        }
+        return (result, guides)
+    }
+
+    /// The smallest-magnitude offset that brings ANY of `edges` to exactly
+    /// ANY `candidate` within `tolerance`; nil if none is close enough.
+    private static func closestSnap(edges: [CGFloat], candidates: [CGFloat], tolerance: CGFloat) -> (offset: CGFloat, line: CGFloat)? {
+        var best: (offset: CGFloat, distance: CGFloat, line: CGFloat)?
+        for edge in edges {
+            for candidate in candidates {
+                let distance = abs(candidate - edge)
+                guard distance <= tolerance else { continue }
+                if best == nil || distance < best!.distance {
+                    best = (candidate - edge, distance, candidate)
+                }
+            }
+        }
+        return best.map { (offset: $0.offset, line: $0.line) }
     }
 }
 
@@ -184,9 +291,14 @@ private struct LayoutCanvas: View {
 /// (normalized, Y-DOWN — SwiftUI's own coordinate system already matches
 /// this convention directly, no flip needed here unlike the AppKit program
 /// layer). Dragging the body moves it; dragging a corner handle resizes
-/// from that corner. Every drag reports through `onChange` pre-clamped via
-/// `StageDisplayPane.clamped` — the same clamp/minimum-size rule enforced
-/// on decode.
+/// from that corner — except for a PROGRAM pane (D20), which locks to 16:9
+/// (normalized height == width on this 16:9 canvas — see
+/// `StageDisplayPane.clamped(_:lockToSquare:)`): width drives height, and
+/// the corner diagonally opposite the one being dragged never moves. Every
+/// drag also snaps to canvas edges/center lines and other enabled panes'
+/// edges/centers (D20, `LayoutSnapping`) before reporting through `onChange`,
+/// pre-clamped via `StageDisplayPane.clamped` — the same clamp/minimum-size
+/// rule enforced on decode.
 private struct PaneBox: View {
     let pane: StageDisplayPane
     /// D16: the group's name for a program pane (there can be several),
@@ -194,18 +306,42 @@ private struct PaneBox: View {
     /// only it has access to the show's output groups.
     let label: String
     let canvasSize: CGSize
+    /// D20: every OTHER enabled pane's frame, in canvas-space points — snap
+    /// targets for both the move and resize gestures below.
+    let others: [CGRect]
     let onChange: (StageRect) -> Void
+    /// D20: fired with the alignment guides currently engaged (empty when
+    /// none) — the caller (`LayoutCanvas`) draws them above every box.
+    let onGuidesChanged: ([LayoutSnapping.Guide]) -> Void
 
     @State private var dragStartRect: StageRect?
+    @State private var isInteracting = false
 
     private let handleSize: CGFloat = 10
+    private static let snapTolerance: CGFloat = 6
 
-    private var frame: CGRect {
+    private var isProgram: Bool { pane.kind == .program }
+
+    private var frame: CGRect { Self.canvasFrame(for: pane.rect, canvasSize: canvasSize) }
+
+    /// Canvas-space (points) frame for a normalized rect — shared with
+    /// `LayoutCanvas` (to compute `others`), so `fileprivate`.
+    fileprivate static func canvasFrame(for rect: StageRect, canvasSize: CGSize) -> CGRect {
         CGRect(
-            x: pane.rect.x * canvasSize.width,
-            y: pane.rect.y * canvasSize.height,
-            width: pane.rect.width * canvasSize.width,
-            height: pane.rect.height * canvasSize.height
+            x: rect.x * canvasSize.width,
+            y: rect.y * canvasSize.height,
+            width: rect.width * canvasSize.width,
+            height: rect.height * canvasSize.height
+        )
+    }
+
+    private func normalizedRect(fromCanvas canvasRect: CGRect) -> StageRect {
+        guard canvasSize.width > 0, canvasSize.height > 0 else { return pane.rect }
+        return StageRect(
+            x: canvasRect.minX / canvasSize.width,
+            y: canvasRect.minY / canvasSize.height,
+            width: canvasRect.width / canvasSize.width,
+            height: canvasRect.height / canvasSize.height
         )
     }
 
@@ -213,10 +349,10 @@ private struct PaneBox: View {
         let boxFrame = frame
         ZStack {
             RoundedRectangle(cornerRadius: 3)
-                .fill(Theme.accent.opacity(0.18))
+                .fill(Theme.accent.opacity(isInteracting ? 0.26 : 0.18))
                 .overlay(
                     RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .strokeBorder(Theme.accent.opacity(isInteracting ? 1 : 0.7), lineWidth: isInteracting ? 2 : 1)
                 )
             Text(label)
                 .font(.caption.weight(.semibold))
@@ -236,13 +372,23 @@ private struct PaneBox: View {
             .onChanged { value in
                 guard canvasSize.width > 0, canvasSize.height > 0 else { return }
                 let start = dragStartRect ?? pane.rect
-                if dragStartRect == nil { dragStartRect = start }
+                if dragStartRect == nil { dragStartRect = start; isInteracting = true }
                 var rect = start
                 rect.x = start.x + Double(value.translation.width / canvasSize.width)
                 rect.y = start.y + Double(value.translation.height / canvasSize.height)
-                onChange(StageDisplayPane.clamped(rect))
+                let candidate = StageDisplayPane.clamped(rect, lockToSquare: isProgram)
+                let canvasCandidate = Self.canvasFrame(for: candidate, canvasSize: canvasSize)
+                let snapped = LayoutSnapping.snap(
+                    rect: canvasCandidate, others: others, canvas: canvasSize, tolerance: Self.snapTolerance
+                )
+                onGuidesChanged(snapped.guides)
+                onChange(StageDisplayPane.clamped(normalizedRect(fromCanvas: snapped.rect), lockToSquare: isProgram))
             }
-            .onEnded { _ in dragStartRect = nil }
+            .onEnded { _ in
+                dragStartRect = nil
+                isInteracting = false
+                onGuidesChanged([])
+            }
     }
 
     private enum Corner: CaseIterable {
@@ -255,6 +401,29 @@ private struct PaneBox: View {
             case .bottomLeading: CGPoint(x: frame.minX, y: frame.maxY)
             case .bottomTrailing: CGPoint(x: frame.maxX, y: frame.maxY)
             }
+        }
+
+        /// The corner diagonally opposite this one — the fixed anchor a
+        /// resize drag from THIS corner never moves.
+        var opposite: Corner {
+            switch self {
+            case .topLeading: .bottomTrailing
+            case .topTrailing: .bottomLeading
+            case .bottomLeading: .topTrailing
+            case .bottomTrailing: .topLeading
+            }
+        }
+    }
+
+    /// Rebuilds a canvas-space rect from a fixed `anchor` point (the corner
+    /// OPPOSITE `draggedCorner`) plus a size — the inverse of
+    /// `draggedCorner.point(in:)`/`draggedCorner.opposite.point(in:)`.
+    private static func boxFrame(anchor: CGPoint, draggedCorner: Corner, width: CGFloat, height: CGFloat) -> CGRect {
+        switch draggedCorner {
+        case .topLeading: CGRect(x: anchor.x - width, y: anchor.y - height, width: width, height: height)
+        case .topTrailing: CGRect(x: anchor.x, y: anchor.y - height, width: width, height: height)
+        case .bottomLeading: CGRect(x: anchor.x - width, y: anchor.y, width: width, height: height)
+        case .bottomTrailing: CGRect(x: anchor.x, y: anchor.y, width: width, height: height)
         }
     }
 
@@ -274,9 +443,10 @@ private struct PaneBox: View {
             .onChanged { value in
                 guard canvasSize.width > 0, canvasSize.height > 0 else { return }
                 let start = dragStartRect ?? pane.rect
-                if dragStartRect == nil { dragStartRect = start }
+                if dragStartRect == nil { dragStartRect = start; isInteracting = true }
                 let dx = Double(value.translation.width / canvasSize.width)
                 let dy = Double(value.translation.height / canvasSize.height)
+
                 var rect = start
                 switch corner {
                 case .topLeading:
@@ -296,8 +466,34 @@ private struct PaneBox: View {
                     rect.width = start.width + dx
                     rect.height = start.height + dy
                 }
-                onChange(StageDisplayPane.clamped(rect))
+
+                // D20: `clamped(_:lockToSquare:)` derives height from width
+                // for a PROGRAM pane — width authoritative, so a corner drag
+                // adjusts both coherently; every other kind is untouched.
+                let candidate = StageDisplayPane.clamped(rect, lockToSquare: isProgram)
+                let canvasCandidate = Self.canvasFrame(for: candidate, canvasSize: canvasSize)
+                let anchor = corner.opposite.point(in: canvasCandidate)
+
+                // Resize-edge snap: snap only the dragged CORNER POINT (as a
+                // zero-size probe rect) so the opposite anchor corner never
+                // moves — see `LayoutSnapping`'s doc comment.
+                let draggedPoint = corner.point(in: canvasCandidate)
+                let snapped = LayoutSnapping.snap(
+                    rect: CGRect(origin: draggedPoint, size: .zero),
+                    others: others, canvas: canvasSize, tolerance: Self.snapTolerance
+                )
+                onGuidesChanged(snapped.guides)
+
+                let width = abs(snapped.rect.origin.x - anchor.x)
+                let height = isProgram ? width : abs(snapped.rect.origin.y - anchor.y)
+                let snappedCanvasRect = Self.boxFrame(anchor: anchor, draggedCorner: corner, width: width, height: height)
+
+                onChange(StageDisplayPane.clamped(normalizedRect(fromCanvas: snappedCanvasRect), lockToSquare: isProgram))
             }
-            .onEnded { _ in dragStartRect = nil }
+            .onEnded { _ in
+                dragStartRect = nil
+                isInteracting = false
+                onGuidesChanged([])
+            }
     }
 }

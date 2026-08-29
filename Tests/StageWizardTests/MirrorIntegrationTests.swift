@@ -198,4 +198,152 @@ final class MirrorIntegrationTests: XCTestCase {
         XCTAssertTrue(paintOrder[1] === programLayers[0], "program paints second — above content, below panic")
         XCTAssertTrue(paintOrder[2] === panicLayers[0], "panic paints last (top) — always wins")
     }
+
+    // MARK: - D20: mirrored content tracks program-pane frame changes (the scaling bug)
+
+    /// Drives the REAL `syncProgramPanes` re-frame branch (a live pane-rect
+    /// edit while a cue is already mirroring — exactly what the layout
+    /// editor's drag gesture triggers) and proves the mirrored
+    /// `AVPlayerLayer`'s frame tracks the pane's NEW size. Before the D20
+    /// fix, `syncProgramPanes` re-framed only the HOST layer; the player's
+    /// own sublayer kept whatever frame it got at attach time, so it went
+    /// stale (misplaced/mis-scaled) the moment the pane was resized —
+    /// exactly Marco's "content doesn't scale when resizing" report.
+    func testMirroredVideoContentTracksProgramPaneRectEditWhileRunning() async throws {
+        let videoURL = Self.mediaDir.appendingPathComponent("ident-5s.mov")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: videoURL.path),
+            "TestMedia missing — run: swift Tools/make-test-media.swift TestMedia"
+        )
+
+        let app = AppModel()
+        let controller = StageDisplayController()
+        controller.appModel = app
+
+        let groupID = UUID()
+        let group = OutputGroup(id: groupID, name: "Resize Mirror Group")
+        app.document.mutate { $0.settings.outputGroups = [group] }
+
+        let initialRect = StageRect(x: 0.1, y: 0.1, width: 0.3, height: 0.3)
+        var settings = StageDisplaySettings(enabled: true)
+        settings.panes.append(StageDisplayPane(kind: .program, enabled: true, rect: initialRect, programGroupID: groupID))
+        controller.sync(settings: settings, outputGroups: [group], active: true, mode: .rehearsal, operatorScreenDisplayID: nil)
+        defer {
+            controller.sync(settings: StageDisplaySettings(), outputGroups: [], active: false, mode: .edit, operatorScreenDisplayID: nil)
+        }
+        XCTAssertEqual(controller.mirroredProgramGroupIDs, Set([groupID]))
+
+        // Arm a real video cue targeting the program pane directly (the
+        // pane is already mirroring, exactly like D19's existing test) —
+        // this is an ARM-TIME attach, sized to whatever the host's bounds
+        // were the instant it leased the layer.
+        let programTarget = StageDisplayController.programTarget(for: groupID)
+        let player = try await VideoCuePlayer.arm(
+            body: VideoBody(
+                media: MediaReference(relativePath: "ident-5s.mov", absolutePath: videoURL.path),
+                startTime: 0, endTime: nil, volumeDB: -50, outputGroupID: groupID
+            ),
+            fileURL: videoURL,
+            targets: [programTarget]
+        )
+        defer { player.stop() }
+
+        let hostBefore = try XCTUnwrap(controller.debugProgramHostLayer(for: groupID))
+        let mirroredBefore = try XCTUnwrap(hostBefore.sublayers?.first)
+        XCTAssertEqual(mirroredBefore.frame, hostBefore.bounds, "attach seeds the sublayer's frame to the host's bounds")
+        // Snapshot VALUES (CGRect/CGSize are structs) before mutating the
+        // SAME CALayer objects below — reading `hostBefore.bounds` again
+        // afterward would report the layer's CURRENT (post-resize) state,
+        // since `hostBefore`/`mirroredBefore` are references to the very
+        // layers `syncProgramPanes` reuses and re-frames in place.
+        let beforeHostSize = hostBefore.bounds.size
+        let beforeMirroredWidth = mirroredBefore.frame.width
+
+        // Live pane-rect edit while the cue is still running/mirroring —
+        // exactly what dragging the box in the layout editor does.
+        var resized = settings
+        let idx = try XCTUnwrap(resized.panes.firstIndex { $0.programGroupID == groupID })
+        resized.panes[idx].rect = StageRect(x: 0.05, y: 0.05, width: 0.6, height: 0.6)
+        controller.sync(settings: resized, outputGroups: [group], active: true, mode: .rehearsal, operatorScreenDisplayID: nil)
+
+        let hostAfter = try XCTUnwrap(controller.debugProgramHostLayer(for: groupID))
+        let mirroredAfter = try XCTUnwrap(hostAfter.sublayers?.first)
+        XCTAssertNotEqual(hostAfter.bounds.size, beforeHostSize, "the pane actually got bigger")
+        XCTAssertEqual(mirroredAfter.frame, hostAfter.bounds, "mirrored content tracks the resized pane frame")
+        XCTAssertGreaterThan(mirroredAfter.frame.width, beforeMirroredWidth, "visibly bigger, not stale")
+    }
+
+    /// Same fix, the OTHER call site: a real floating-window RESIZE (the
+    /// resize observer path, `repositionProgramPanes`) — this is the exact
+    /// scenario Marco reported ("scale properly when sizing the floating
+    /// window").
+    func testMirroredVideoContentTracksFloatingWindowResize() async throws {
+        let videoURL = Self.mediaDir.appendingPathComponent("ident-5s.mov")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: videoURL.path),
+            "TestMedia missing — run: swift Tools/make-test-media.swift TestMedia"
+        )
+
+        let app = AppModel()
+        let controller = StageDisplayController()
+        controller.appModel = app
+
+        let groupID = UUID()
+        let group = OutputGroup(id: groupID, name: "Window Resize Mirror Group")
+        app.document.mutate { $0.settings.outputGroups = [group] }
+
+        var settings = StageDisplaySettings(enabled: true)
+        settings.panes.append(StageDisplayPane(
+            kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupID
+        ))
+        controller.sync(settings: settings, outputGroups: [group], active: true, mode: .rehearsal, operatorScreenDisplayID: nil)
+        defer {
+            controller.sync(settings: StageDisplaySettings(), outputGroups: [], active: false, mode: .edit, operatorScreenDisplayID: nil)
+        }
+
+        let programTarget = StageDisplayController.programTarget(for: groupID)
+        let player = try await VideoCuePlayer.arm(
+            body: VideoBody(
+                media: MediaReference(relativePath: "ident-5s.mov", absolutePath: videoURL.path),
+                startTime: 0, endTime: nil, volumeDB: -50, outputGroupID: groupID
+            ),
+            fileURL: videoURL,
+            targets: [programTarget]
+        )
+        defer { player.stop() }
+
+        let hostBeforeResize = try XCTUnwrap(controller.debugProgramHostLayer(for: groupID))
+        // Snapshot the VALUE (CGSize is a struct) before resizing — the same
+        // CALayer gets re-framed in place, so re-reading `.bounds` on it
+        // later would report the NEW size, not this baseline.
+        let sizeBeforeResize = hostBeforeResize.bounds.size
+
+        let window = try XCTUnwrap(controller.debugWindow, "the floating presentation must have a real window")
+        var newFrame = window.frame
+        newFrame.size = CGSize(width: newFrame.width + 220, height: newFrame.height + 160)
+        window.setFrame(newFrame, display: true)
+
+        // `repositionProgramPanes` hops off the resize notification via a
+        // `Task { @MainActor in … }` — poll until it has ACTUALLY run (the
+        // host layer's size changed from the baseline above), not just
+        // until the mirrored sublayer happens to agree with a still-stale
+        // host (which would be true trivially, before the fix runs at all).
+        let started = ContinuousClock.now
+        var hostLayer: CALayer?
+        var mirroredLayer: CALayer?
+        while started.duration(to: .now).seconds < 3 {
+            hostLayer = controller.debugProgramHostLayer(for: groupID)
+            mirroredLayer = hostLayer?.sublayers?.first
+            if let mirroredLayer, let hostLayer,
+               hostLayer.bounds.size != sizeBeforeResize, mirroredLayer.frame == hostLayer.bounds {
+                break
+            }
+            await wait(0.05)
+        }
+        let finalHost = try XCTUnwrap(hostLayer)
+        let finalMirrored = try XCTUnwrap(mirroredLayer)
+        XCTAssertNotEqual(finalHost.bounds.size, sizeBeforeResize, "the window resize actually reached the program pane")
+        XCTAssertEqual(finalMirrored.frame, finalHost.bounds, "mirrored content tracks the resized floating window")
+        XCTAssertGreaterThan(finalHost.bounds.width, 0)
+    }
 }

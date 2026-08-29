@@ -471,7 +471,10 @@ public final class CameraCuePlayer: MediaPlayback {
         let gravity = geometry.gravity(fillMode: fillMode)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in allTargetLayers {
+        // D20: mirror (`attachedExtras`) layers deliberately excluded — see
+        // `attachTarget`. They stay pinned to `.resizeAspect`/no transform so
+        // the stage-display program pane always letterboxes the full frame.
+        for entry in targetLayers {
             geometry.apply(to: entry.container, fillMode: fillMode)
             entry.preview.videoGravity = gravity
             entry.content.contentsGravity = Self.contentsGravity(for: gravity)
@@ -506,7 +509,14 @@ public final class CameraCuePlayer: MediaPlayback {
         // shows the picture at its current level instead of popping.
         let currentOpacity = (targetLayers.first?.container.presentation() ?? targetLayers.first?.container)?.opacity ?? 0
         let currentZ = targetLayers.first?.container.zPosition ?? 5   // matches CameraBody's default render layer
-        let gravity = geometrySetting.gravity(fillMode: fillModeSetting)
+        // D20: mirror layers always letterbox the full frame — forced
+        // `.resizeAspect` (never the cue's own fill mode) and no custom
+        // stage-position transform on the container (see the skipped
+        // `geometrySetting.apply` below) — since `attachTarget` is only ever
+        // reached via the stage-display program pane (see
+        // `AppModel.syncMirrorAttachments`), a monitor thumbnail rather than
+        // a second real output.
+        let gravity: AVLayerVideoGravity = .resizeAspect
         let processed = effects.anyEnabled
 
         CATransaction.begin()
@@ -532,7 +542,6 @@ public final class CameraCuePlayer: MediaPlayback {
         container.addSublayer(content)
 
         host.addSublayer(container)
-        geometrySetting.apply(to: container, fillMode: fillModeSetting)
         CATransaction.commit()
 
         attachedExtras.append((target, TargetLayers(container: container, preview: preview, content: content)))

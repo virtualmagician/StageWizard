@@ -174,7 +174,7 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
     public init(kind: StageDisplayPaneKind, enabled: Bool, rect: StageRect, programGroupID: UUID? = nil) {
         self.kind = kind
         self.enabled = enabled
-        self.rect = Self.clamped(rect)
+        self.rect = Self.clamped(rect, lockToSquare: kind == .program)
         self.programGroupID = programGroupID
     }
 
@@ -185,7 +185,7 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         kind = try c.decode(StageDisplayPaneKind.self, forKey: .kind)
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         let decodedRect = try c.decodeIfPresent(StageRect.self, forKey: .rect) ?? Self.defaultRect(for: kind)
-        rect = Self.clamped(decodedRect)
+        rect = Self.clamped(decodedRect, lockToSquare: kind == .program)
         programGroupID = try c.decodeIfPresent(UUID.self, forKey: .programGroupID)
     }
 
@@ -197,9 +197,27 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
     /// Clamp fully inside 0...1 with the enforced minimum size. Also guards
     /// against non-finite numbers (NaN/inf from bad hand-edited JSON)
     /// collapsing the whole layout.
-    public static func clamped(_ rect: StageRect) -> StageRect {
+    ///
+    /// `lockToSquare` (D20): PROGRAM panes get a SOFT 16:9 lock, enforced
+    /// here as normalized height == width. The layout editor previews a
+    /// FIXED 16:9 canvas (`StageDisplayLayoutEditor`'s `LayoutCanvas`), so a
+    /// pane that's 16:9 IN PIXELS on that canvas works out to equal
+    /// normalized width and height: pixelW = w·1920, pixelH = h·1080, and
+    /// 16:9 means pixelH = pixelW·9/16 ⇒ h·1080 = w·1920·9/16 = w·1080 ⇒
+    /// h = w. The REAL target display can be any aspect, so this can only
+    /// ever be exact for a 16:9 surface — it's a soft lock on the AUTHORED
+    /// layout, not a hard guarantee; at render time a non-16:9 surface still
+    /// letterboxes correctly via `AVPlayerLayer.videoGravity`/
+    /// `contentsGravity` (forced to `.resizeAspect` for mirror layers — see
+    /// `VideoCuePlayer.attachTarget` and friends). Width is authoritative:
+    /// height is derived from width, never the other way round, so a plain
+    /// width-drag (the layout editor's resize gesture) adjusts both
+    /// coherently — see `StageDisplayLayoutEditor`'s `PaneBox.resizeDrag`.
+    public static func clamped(_ rect: StageRect, lockToSquare: Bool = false) -> StageRect {
         let width = (rect.width.isFinite ? rect.width : minimumSize.width).clamped(to: minimumSize.width...1)
-        let height = (rect.height.isFinite ? rect.height : minimumSize.height).clamped(to: minimumSize.height...1)
+        let height = lockToSquare
+            ? width
+            : (rect.height.isFinite ? rect.height : minimumSize.height).clamped(to: minimumSize.height...1)
         let x = (rect.x.isFinite ? rect.x : 0).clamped(to: 0...(1 - width))
         let y = (rect.y.isFinite ? rect.y : 0).clamped(to: 0...(1 - height))
         return StageRect(x: x, y: y, width: width, height: height)
@@ -215,7 +233,9 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         case .standingBy: StageRect(x: 0.05, y: 0.18, width: 0.90, height: 0.34)
         case .notes: StageRect(x: 0.10, y: 0.55, width: 0.80, height: 0.15)
         case .running: StageRect(x: 0.02, y: 0.72, width: 0.96, height: 0.26)
-        case .program: StageRect(x: 0.62, y: 0.52, width: 0.36, height: 0.18)
+        // D20: height == width — a 16:9 pane on this editor's 16:9 reference
+        // canvas (see `clamped(_:lockToSquare:)`'s doc comment).
+        case .program: StageRect(x: 0.62, y: 0.52, width: 0.36, height: 0.36)
         case .gesture: StageRect(x: 0.02, y: 0.52, width: 0.30, height: 0.18)
         }
     }

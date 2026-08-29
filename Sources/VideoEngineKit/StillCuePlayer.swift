@@ -232,7 +232,11 @@ public final class StillCuePlayer: MediaPlayback {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in allLayers {
+        // D20: mirror (`extraLayers`) layers deliberately excluded — see
+        // `attachTarget`. They stay at `.resizeAspect`/identity transform so
+        // the stage-display program pane always letterboxes the full image,
+        // independent of the cue's own fill mode/geometry.
+        for layer in layers {
             layer.contentsGravity = gravity
             layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
         }
@@ -264,14 +268,19 @@ public final class StillCuePlayer: MediaPlayback {
 
         let layer = CALayer()
         layer.contents = layers.first?.contents
-        layer.contentsGravity = layers.first?.contentsGravity ?? .resizeAspect
+        // D20: mirror layers always letterbox the full image — forced
+        // `.resizeAspect` (never inherited from the cue's own fill mode) and
+        // no custom stage-position transform — since `attachTarget` is only
+        // ever reached via the stage-display program pane (see
+        // `AppModel.syncMirrorAttachments`), a monitor thumbnail rather than
+        // a second real output.
+        layer.contentsGravity = .resizeAspect
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.frame = host.bounds
         layer.opacity = currentOpacity
         layer.zPosition = currentZ
         host.addSublayer(layer)
-        layer.transform = geometrySetting.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
         CATransaction.commit()
 
         extraLayers[target] = layer

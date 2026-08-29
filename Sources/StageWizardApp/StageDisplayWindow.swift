@@ -130,6 +130,18 @@ final class StageDisplayController {
     /// program target that has nowhere to lease a layer from.
     var mirroredProgramGroupIDs: Set<UUID> { Set(programHostLayers.keys) }
 
+    /// D20: whether a group's program pane currently has at least one
+    /// mirrored content sublayer actually painting — read by the SwiftUI
+    /// placeholder (`StageDisplayContentView.programPane`) so the dim
+    /// "PROGRAM · <group>" watermark hides exactly while real content is
+    /// there, instead of always painting underneath it (visible through any
+    /// gap letterboxing/mis-fit leaves — the reported "stray labels" bug).
+    /// A group with no registered host (deleted, or never mirrored) reports
+    /// `false`, same as a registered-but-empty one.
+    func paneHasContent(groupID: UUID) -> Bool {
+        programHostLayers[groupID]?.sublayers?.isEmpty == false
+    }
+
     /// Test-only introspection (also handy for future debugging): the
     /// currently-presented window's content container's backing layer, if
     /// any. `internal`, not `public` or `private` — reachable only via
@@ -148,6 +160,22 @@ final class StageDisplayController {
     var debugContainerLayer: CALayer? {
         window?.displayIfNeeded()
         return window?.contentView?.layer
+    }
+
+    /// Test-only introspection: the currently-presented window, if any —
+    /// lets a regression test drive a REAL resize (`setFrame`) to exercise
+    /// the D20 resize-observer reframe path (`repositionProgramPanes`)
+    /// exactly like a live operator drag of the floating window would.
+    /// `internal`, not `private` — reachable only via `@testable import`.
+    var debugWindow: NSWindow? { window }
+
+    /// Test-only introspection: the live content layer registered for one
+    /// group's program pane, if any — lets a regression test read back
+    /// whatever `attachTarget`/arm-time attached there (D20: pins the
+    /// reframe-on-resize fix) without needing a real running window.
+    /// `internal`, not `private` — reachable only via `@testable import`.
+    func debugProgramHostLayer(for groupID: UUID) -> CALayer? {
+        programHostLayers[groupID]
     }
 
     /// Pure decision: should the stage display window be open right now?
@@ -340,6 +368,7 @@ final class StageDisplayController {
         for pane in settings.programPanes where pane.enabled {
             guard let groupID = pane.programGroupID, let layer = programHostLayers[groupID] else { continue }
             layer.frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+            Self.reframeMirroredContent(host: layer)
         }
         CATransaction.commit()
     }
@@ -395,6 +424,7 @@ final class StageDisplayController {
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 layer.frame = frame
+                Self.reframeMirroredContent(host: layer)
                 CATransaction.commit()
                 continue
             }
@@ -459,6 +489,46 @@ final class StageDisplayController {
     /// duplicated magic number.
     static let programLayerZPosition: CGFloat = 100
     static let panicLayerZPosition: CGFloat = 1000
+
+    /// D20: re-frame every DIRECT sublayer of a program host layer to match
+    /// the host's own CURRENT bounds — called right after the host itself is
+    /// re-framed, both when the floating window resizes
+    /// (`repositionProgramPanes`) and when a pane's rect is edited live while
+    /// running (`syncProgramPanes`'s existing-layer branch). Without this, a
+    /// mirrored player's content layer (an `AVPlayerLayer` for video, a plain
+    /// `CALayer` for text/still, or a camera's container layer) keeps
+    /// whatever frame it had at ATTACH time forever — misplaced/mis-scaled
+    /// the moment the pane's on-screen size changes (the reported "content
+    /// doesn't scale when resizing the floating window" bug).
+    ///
+    /// Sets `bounds` + `position`, deliberately NOT `frame`: a mirrored
+    /// player's layer CAN carry a non-identity `transform` (a video/text/
+    /// still cue authored with Custom geometry, mirrored while it happens to
+    /// already be arm-time-targeted at this host — see `EngineBridge.
+    /// extraTargets`), and Apple's own documentation states `CALayer.frame`
+    /// is undefined whenever `transform` isn't the identity transform.
+    /// `PreviewContentView.layout()` already hits this exact case for
+    /// rehearsal preview windows and uses bounds+position for the same
+    /// reason — this mirrors that established convention instead of
+    /// reintroducing the bug in a second place.
+    ///
+    /// Only reframes ONE level deep: a camera cue's mirrored container has
+    /// its own preview/content sublayers with `autoresizingMask` already set
+    /// RELATIVE TO THE CONTAINER, so changing the container's `bounds` here
+    /// makes CALayer's own (built-in, no NSView required) autoresizing
+    /// propagate the rest — see `CameraCuePlayer.init`/`attachTarget`.
+    ///
+    /// `internal`, not `private`, so `MirrorIntegrationTests` can exercise it
+    /// directly against a synthetic layer tree. Must run inside the caller's
+    /// own `CATransaction` (already disabling implicit actions) — this opens
+    /// none of its own.
+    static func reframeMirroredContent(host: CALayer) {
+        guard let sublayers = host.sublayers else { return }
+        for sublayer in sublayers {
+            sublayer.bounds = CGRect(origin: .zero, size: host.bounds.size)
+            sublayer.position = CGPoint(x: host.bounds.midX, y: host.bounds.midY)
+        }
+    }
 
     /// Builds a PLAIN (non-flipped, standard AppKit y-up) container view
     /// hosting two SwiftUI layers — the ordinary panes (bottom) and an
@@ -709,15 +779,23 @@ struct StageDisplayContentView: View {
     private func standingByPane(size: CGSize) -> some View {
         VStack(spacing: size.height * 0.04) {
             if let cue = app.transport.standingByCue {
-                Text(cue.number)
-                    .font(.system(size: size.height * 0.12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.gray)
-                Text(cue.displayName)
-                    .font(.system(size: size.height * 0.5, weight: .bold))
-                    .minimumScaleFactor(0.15)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
+                // D20: the cue number moves LEFT of the name on the same
+                // baseline row, and grows to roughly half the name's size
+                // (was a small caption-sized line above it) — everything
+                // about how the NAME itself is sized (`minimumScaleFactor`,
+                // `lineLimit`, alignment) is unchanged.
+                HStack(alignment: .firstTextBaseline, spacing: size.width * 0.03) {
+                    Text(cue.number)
+                        .font(.system(size: size.height * 0.25, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.gray)
+                        .lineLimit(1)
+                    Text(cue.displayName)
+                        .font(.system(size: size.height * 0.5, weight: .bold))
+                        .minimumScaleFactor(0.15)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                }
             } else if app.transport.isPlayheadPastEnd {
                 Text("END OF SHOW")
                     .font(.system(size: size.height * 0.22, weight: .bold))
@@ -783,18 +861,31 @@ struct StageDisplayContentView: View {
     /// through whenever nothing is currently routed here.
     private func programPane(_ pane: StageDisplayPane, size: CGSize) -> some View {
         let groupName = pane.programGroupID.flatMap { document.show.settings.group(withID: $0)?.name } ?? "(deleted)"
-        return ZStack {
-            Color.black
-            Text("PROGRAM · \(groupName)")
-                .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
-                .tracking(2)
-                .lineLimit(1)
-                .minimumScaleFactor(0.4)
-                .foregroundStyle(.white.opacity(0.15))
-                .padding(.horizontal, size.width * 0.05)
+        let groupID = pane.programGroupID
+        // D20: the placeholder is a WATERMARK for "nothing routed here yet" —
+        // it must stop painting the instant real content is mirrored, or it
+        // shows through any gap letterboxing/mis-fit leaves (the reported
+        // "stray labels from video sources" bug). `paneHasContent` reads the
+        // live layer tree directly (no new plumbing); polled at ~2 Hz like
+        // the other periodically-updating panes (`clockPane`/`runningPane`)
+        // rather than driving new state on every layer-tree change.
+        return TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+            let hasContent = groupID.map { app.stageDisplayController.paneHasContent(groupID: $0) } ?? false
+            ZStack {
+                Color.black
+                if !hasContent {
+                    Text("PROGRAM · \(groupName)")
+                        .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.4)
+                        .foregroundStyle(.white.opacity(0.15))
+                        .padding(.horizontal, size.width * 0.05)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .clipped()
         }
-        .frame(width: size.width, height: size.height)
-        .clipped()
     }
 
     // MARK: Gesture (D15) — live gesture-GO readout: the pre-warm timer.

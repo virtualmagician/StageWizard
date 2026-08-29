@@ -147,7 +147,11 @@ public final class TextCuePlayer: MediaPlayback {
         body.geometry = geometry
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in allLayers {
+        // D20: mirror (`extraLayers`) layers deliberately excluded — see
+        // `attachTarget`. They stay at the identity transform so the
+        // stage-display program pane always shows the full authored canvas,
+        // aspect-fit, regardless of the cue's own stage-relative position.
+        for layer in layers {
             layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
         }
         CATransaction.commit()
@@ -177,6 +181,11 @@ public final class TextCuePlayer: MediaPlayback {
         let currentZ = layers.first?.zPosition ?? CGFloat(body.layer)
 
         let layer = CALayer()
+        // D20: mirror layers always show the full authored canvas aspect-fit
+        // — no custom stage-position transform (unlike arm-time layers via
+        // `applyGeometry`) — since `attachTarget` is only ever reached via
+        // the stage-display program pane (see `AppModel.syncMirrorAttachments`),
+        // a monitor thumbnail rather than a second real output.
         layer.contentsGravity = .resizeAspect
         layer.isOpaque = false
         layer.contents = layers.first?.contents
@@ -186,7 +195,6 @@ public final class TextCuePlayer: MediaPlayback {
         layer.opacity = currentOpacity
         layer.zPosition = currentZ
         host.addSublayer(layer)
-        layer.transform = body.geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
         CATransaction.commit()
 
         extraLayers[target] = layer

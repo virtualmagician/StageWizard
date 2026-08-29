@@ -448,7 +448,11 @@ public final class VideoCuePlayer: MediaPlayback {
         fillModeSetting = fillMode
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in allLayers {
+        // D20: mirror (`extraLayers`) layers deliberately excluded — see
+        // `attachTarget`. They stay pinned to `.resizeAspect`/no transform so
+        // the stage-display program pane always letterboxes the FULL frame,
+        // independent of how the real output is filled/cropped/positioned.
+        for layer in playerLayers {
             geometry.apply(to: layer, fillMode: fillMode)
         }
         CATransaction.commit()
@@ -488,8 +492,15 @@ public final class VideoCuePlayer: MediaPlayback {
         layer.frame = host.bounds
         layer.opacity = currentOpacity
         layer.zPosition = currentZ
+        // D20: mirror layers ALWAYS letterbox the full frame, regardless of
+        // the cue's own configured fill mode/geometry — `attachTarget` is
+        // only ever reached via the stage-display program pane (see
+        // `AppModel.syncMirrorAttachments`), a monitor thumbnail rather than
+        // a second real output. No custom `transform` is applied here either
+        // (unlike arm-time layers via `VideoGeometry.apply`), so the pane
+        // always shows the same framing the real output does.
+        layer.videoGravity = .resizeAspect
         host.addSublayer(layer)
-        geometrySetting.apply(to: layer, fillMode: fillModeSetting)
         CATransaction.commit()
 
         extraLayers[target] = layer

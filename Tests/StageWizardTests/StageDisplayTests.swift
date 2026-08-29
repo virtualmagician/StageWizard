@@ -247,6 +247,12 @@ final class StageDisplayTests: XCTestCase {
         var show = ShowFile()
         var settings = StageDisplaySettings()
         let groupID = UUID()
+        // D20: height (0.25) deliberately differs from width (0.3) here —
+        // the program pane's 16:9 lock (height := width) applies at
+        // CONSTRUCTION time (`StageDisplayPane.init`), not just decode, so
+        // the round trip is expected to normalize it; see
+        // `testProgramPaneRectNormalizesToSquareOnDecode` below for the
+        // decode-specific case.
         settings.panes.append(StageDisplayPane(
             kind: .program, enabled: true, rect: StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25), programGroupID: groupID
         ))
@@ -256,7 +262,7 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(decoded.settings.stageDisplay.panes.count, StageDisplayPaneKind.allCases.count)
         let pane = decoded.settings.stageDisplay.programPane(forGroup: groupID)
         XCTAssertEqual(pane?.enabled, true)
-        XCTAssertEqual(pane?.rect, StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25))
+        XCTAssertEqual(pane?.rect, StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.3), "height locked to width")
         XCTAssertEqual(pane?.programGroupID, groupID)
     }
 
@@ -325,7 +331,9 @@ final class StageDisplayTests: XCTestCase {
         let pane = s.programPane(forGroup: legacyGroupID)
         XCTAssertNotNil(pane)
         XCTAssertEqual(pane?.enabled, true)
-        XCTAssertEqual(pane?.rect, StageRect(x: 0.6, y: 0.5, width: 0.3, height: 0.2))
+        // D20: the D13-era rect (0.3 x 0.2) predates the 16:9 lock — decode
+        // normalizes height to match width, same as any other program rect.
+        XCTAssertEqual(pane?.rect, StageRect(x: 0.6, y: 0.5, width: 0.3, height: 0.3), "height locked to width on decode")
     }
 
     func testD13EraFileWithNilTopLevelProgramGroupIDDropsTheBareProgramPane() throws {
@@ -981,5 +989,214 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertTrue(container.wantsLayer, "wantsLayer must be set at construction, before any sync can run")
         XCTAssertNotNil(container.layer, "backing layer must exist synchronously — no window, no display pass")
         XCTAssertNil(panicLayer, "no appModel passed in => no SwiftUI content/panic overlay built")
+    }
+
+    // MARK: - D20: StageDisplayController.reframeMirroredContent (resize-tracking fix)
+
+    /// The core of the D20 fix: after a program host layer's OWN frame
+    /// changes (window resize, or a live pane-rect edit), every mirrored
+    /// player's sublayer must track the host's NEW bounds instead of staying
+    /// pinned to whatever it was at attach time.
+    func testReframeMirroredContentTracksHostBoundsAfterResize() {
+        let host = CALayer()
+        host.frame = CGRect(x: 0, y: 0, width: 100, height: 60)
+        let mirrored = CALayer()
+        mirrored.frame = host.bounds   // exactly how every player's attach path seeds it
+        host.addSublayer(mirrored)
+
+        host.frame = CGRect(x: 10, y: 20, width: 400, height: 300)
+        StageDisplayController.reframeMirroredContent(host: host)
+
+        XCTAssertEqual(mirrored.frame, host.bounds, "sublayer follows the host's new bounds")
+        XCTAssertEqual(mirrored.frame.size, CGSize(width: 400, height: 300))
+    }
+
+    func testReframeMirroredContentHandlesMultipleSublayers() {
+        // A camera cue's mirrored CONTAINER is the only direct sublayer of
+        // the host, but nothing about the helper assumes exactly one.
+        let host = CALayer()
+        host.frame = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let a = CALayer()
+        a.frame = host.bounds
+        let b = CALayer()
+        b.frame = host.bounds
+        host.addSublayer(a)
+        host.addSublayer(b)
+
+        host.frame = CGRect(x: 0, y: 0, width: 50, height: 50)
+        StageDisplayController.reframeMirroredContent(host: host)
+
+        XCTAssertEqual(a.frame, host.bounds)
+        XCTAssertEqual(b.frame, host.bounds)
+    }
+
+    func testReframeMirroredContentNoOpWhenHostHasNoSublayers() {
+        let host = CALayer()
+        host.frame = CGRect(x: 0, y: 0, width: 100, height: 60)
+        // Must not crash / must simply do nothing when nothing is mirrored yet.
+        StageDisplayController.reframeMirroredContent(host: host)
+        XCTAssertNil(host.sublayers)
+    }
+
+    // MARK: - D20: StageDisplayController.paneHasContent (stray placeholder fix)
+
+    func testPaneHasContentFalseWhenGroupNeverRegistered() {
+        let controller = StageDisplayController()
+        XCTAssertFalse(controller.paneHasContent(groupID: UUID()))
+    }
+
+    func testPaneHasContentTracksRegisteredHostLayerSublayers() throws {
+        let app = AppModel()
+        let controller = StageDisplayController()
+        controller.appModel = app
+
+        let groupID = UUID()
+        let group = OutputGroup(id: groupID, name: "Content Flag Group")
+        app.document.mutate { $0.settings.outputGroups = [group] }
+
+        var settings = StageDisplaySettings(enabled: true)
+        settings.panes.append(StageDisplayPane(
+            kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupID
+        ))
+        controller.sync(settings: settings, outputGroups: [group], active: true, mode: .rehearsal, operatorScreenDisplayID: nil)
+        defer {
+            controller.sync(settings: StageDisplaySettings(), outputGroups: [], active: false, mode: .edit, operatorScreenDisplayID: nil)
+        }
+
+        XCTAssertFalse(controller.paneHasContent(groupID: groupID), "registered but nothing has attached yet")
+
+        let hostLayer = try XCTUnwrap(controller.debugProgramHostLayer(for: groupID))
+        hostLayer.addSublayer(CALayer())
+        XCTAssertTrue(controller.paneHasContent(groupID: groupID), "a mirrored sublayer is now present")
+
+        hostLayer.sublayers?.first?.removeFromSuperlayer()
+        XCTAssertFalse(controller.paneHasContent(groupID: groupID), "content removed again")
+    }
+
+    // MARK: - D20: StageDisplayPane.clamped(_:lockToSquare:) — the 16:9 program-pane lock
+
+    func testClampedLocksHeightToWidthWhenRequested() {
+        let rect = StageRect(x: 0.1, y: 0.1, width: 0.4, height: 0.2)
+        let locked = StageDisplayPane.clamped(rect, lockToSquare: true)
+        XCTAssertEqual(locked.width, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(locked.height, 0.4, accuracy: 0.0001, "height forced to match width")
+    }
+
+    func testClampedLeavesNonProgramRectsAlone() {
+        let rect = StageRect(x: 0.1, y: 0.1, width: 0.4, height: 0.2)
+        let unlocked = StageDisplayPane.clamped(rect)
+        XCTAssertEqual(unlocked.width, 0.4, accuracy: 0.0001)
+        XCTAssertEqual(unlocked.height, 0.2, accuracy: 0.0001, "non-program rects keep their own height")
+    }
+
+    func testClampedSquareLockStillClampsPositionInsideTheCanvas() {
+        // Width (0.9) drives a locked height of 0.9 too — the y clamp must
+        // then account for THAT height, not the original 0.3.
+        let rect = StageRect(x: 0.05, y: 0.8, width: 0.9, height: 0.3)
+        let locked = StageDisplayPane.clamped(rect, lockToSquare: true)
+        XCTAssertEqual(locked.height, 0.9, accuracy: 0.0001)
+        XCTAssertLessThanOrEqual(locked.y + locked.height, 1.0001)
+    }
+
+    func testDefaultProgramRectIsAlreadySquare() {
+        let rect = StageDisplayPane.defaultRect(for: .program)
+        XCTAssertEqual(rect.width, rect.height, accuracy: 0.0001)
+    }
+
+    func testProgramPaneRectNormalizesToSquareOnDecode() throws {
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        let groupID = UUID()
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": [
+                ["kind": "program", "enabled": true, "rect": ["x": 0.5, "y": 0.4, "width": 0.4, "height": 0.15], "programGroupID": groupID.uuidString],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        let rect = try XCTUnwrap(decoded.settings.stageDisplay.programPane(forGroup: groupID)?.rect)
+        XCTAssertEqual(rect.width, rect.height, accuracy: 0.0001, "program panes decode with height forced to match width")
+        XCTAssertEqual(rect.width, 0.4, accuracy: 0.0001, "width drives the lock, never height")
+    }
+
+    func testNonProgramPaneRectDoesNotNormalizeToSquareOnDecode() throws {
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": [
+                ["kind": "clock", "enabled": true, "rect": ["x": 0.0, "y": 0.0, "width": 0.4, "height": 0.1]],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertEqual(decoded.settings.stageDisplay.pane(.clock).rect, StageRect(x: 0, y: 0, width: 0.4, height: 0.1))
+    }
+
+    // MARK: - D20: LayoutSnapping.snap (layout editor drag/resize snapping)
+
+    func testSnapEngagesWhenWithinToleranceOfACanvasEdge() {
+        let rect = CGRect(x: 3, y: 50, width: 40, height: 40)   // minX = 3, within 6pt of the left edge (0)
+        let result = LayoutSnapping.snap(rect: rect, others: [], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect.minX, 0, accuracy: 0.0001)
+        XCTAssertTrue(result.guides.contains(.vertical(0)))
+    }
+
+    func testSnapEngagesOnAnotherPanesEdge() {
+        let other = CGRect(x: 100, y: 0, width: 50, height: 50)   // right edge at x = 150
+        let moving = CGRect(x: 154, y: 200, width: 60, height: 60)   // minX = 154, within 6pt of 150
+        let result = LayoutSnapping.snap(rect: moving, others: [other], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect.minX, 150, accuracy: 0.0001)
+        XCTAssertTrue(result.guides.contains(.vertical(150)))
+    }
+
+    func testSnapEngagesOnCanvasCenterLines() {
+        let canvas = CGSize(width: 640, height: 360)
+        // Box centered at x = 320 + 4 (midX within 6pt of the canvas's
+        // horizontal center, 320).
+        let rect = CGRect(x: 284, y: 50, width: 80, height: 40)
+        let result = LayoutSnapping.snap(rect: rect, others: [], canvas: canvas, tolerance: 6)
+        XCTAssertEqual(result.rect.midX, 320, accuracy: 0.0001)
+        XCTAssertTrue(result.guides.contains(.vertical(320)))
+    }
+
+    func testSnapEngagesOnAnotherPanesCenter() {
+        let other = CGRect(x: 100, y: 100, width: 100, height: 100)   // midY = 150
+        let moving = CGRect(x: 0, y: 134, width: 40, height: 40)      // midY = 154, within 6pt of 150
+        let result = LayoutSnapping.snap(rect: moving, others: [other], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect.midY, 150, accuracy: 0.0001)
+        XCTAssertTrue(result.guides.contains(.horizontal(150)))
+    }
+
+    func testSnapDoesNotEngageOutsideTolerance() {
+        let rect = CGRect(x: 20, y: 50, width: 40, height: 40)   // minX = 20, well past 6pt from 0
+        let result = LayoutSnapping.snap(rect: rect, others: [], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect, rect, "nothing within tolerance — the rect passes through unchanged")
+        XCTAssertTrue(result.guides.isEmpty)
+    }
+
+    func testSnapResizeEdgeSnapsADraggedCornerPointToAnotherPanesEdge() {
+        // Mirrors how `PaneBox.resizeDrag` calls this: a ZERO-SIZE probe at
+        // the dragged corner's tentative position.
+        let other = CGRect(x: 200, y: 0, width: 100, height: 100)   // left edge at x = 200
+        let draggedCorner = CGPoint(x: 204, y: 75)                  // within 6pt of x = 200
+        let probe = CGRect(origin: draggedCorner, size: .zero)
+        let result = LayoutSnapping.snap(rect: probe, others: [other], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect.origin.x, 200, accuracy: 0.0001, "the dragged edge snaps to the sibling pane's edge")
+        XCTAssertEqual(result.rect.origin.y, 75, accuracy: 0.0001, "the unrelated axis is untouched")
+        XCTAssertTrue(result.guides.contains(.vertical(200)))
+    }
+
+    func testSnapIndependentPerAxisOnlyTheCloseAxisSnaps() {
+        let rect = CGRect(x: 4, y: 100, width: 40, height: 40)   // x close to the left edge, y is not close to anything
+        let result = LayoutSnapping.snap(rect: rect, others: [], canvas: CGSize(width: 640, height: 360), tolerance: 6)
+        XCTAssertEqual(result.rect.minX, 0, accuracy: 0.0001)
+        XCTAssertEqual(result.rect.minY, 100, accuracy: 0.0001, "y untouched — nothing nearby on that axis")
+        XCTAssertEqual(result.guides, [.vertical(0)])
     }
 }
