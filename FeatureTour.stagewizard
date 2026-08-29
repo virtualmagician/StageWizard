@@ -1,0 +1,278 @@
+{
+  "cues" : [
+    {
+      "armed" : true,
+      "body" : {
+        "box" : {
+          "height" : 1,
+          "width" : 0.92,
+          "x" : 0.04,
+          "y" : 0
+        },
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 0.5,
+        "geometry" : {
+          "mode" : "fillStage",
+          "scaleX" : 1,
+          "scaleY" : 1,
+          "x" : 0,
+          "y" : 0
+        },
+        "layer" : 8,
+        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "plainPreview" : "v1.6 FEATURE TOUR",
+        "rtf" : "e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJ7XGZvbnR0Ymx7XGYwXGZzd2lzc1xmY2hhcnNldDAgSGVsdmV0aWNhLUJvbGQ7fX17XGNvbG9ydGJsO1xyZWQyNTVcZ3JlZW4yNTVcYmx1ZTI1NTt9XGYwXGZzMjAwXGNmMVxxYyB2MS42IEZFQVRVUkUgVE9VUn0=",
+        "type" : "text"
+      },
+      "follow" : {
+        "mode" : "autoContinue",
+        "postWait" : 1.5
+      },
+      "id" : "B7C7C3AE-ED95-42D8-B68A-9172AA42EA4D",
+      "name" : "Title: v1.6 Feature Tour",
+      "notes" : "Welcome! Every edit here is undoable (⌘Z \/ ⇧⌘Z). Preflight checks the rig automatically when you enter Show mode, and a show timer starts counting in the sidebar. GO when ready.",
+      "number" : "1",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endTime" : 8,
+        "fadeInDuration" : 0.3,
+        "fadeOutDuration" : 0.5,
+        "infiniteLoop" : false,
+        "markers" : [
+          {
+            "id" : "DA771ED1-6035-40A6-A0B2-330552BB4291",
+            "name" : "Drop",
+            "time" : 4
+          }
+        ],
+        "media" : {
+          "absolutePath" : "TestMedia\/tone-440-10s.wav",
+          "relativePath" : "TestMedia\/tone-440-10s.wav"
+        },
+        "playCount" : 1,
+        "rate" : 2,
+        "startTime" : 0,
+        "type" : "audio",
+        "volumeDB" : -14
+      },
+      "follow" : {
+        "markerID" : "DA771ED1-6035-40A6-A0B2-330552BB4291",
+        "mode" : "autoContinueAtMarker"
+      },
+      "id" : "8A8D0629-62DF-4A3C-B47E-B23487D66014",
+      "name" : "Tone at 2× rate → marker follow",
+      "notes" : "Playback rate: 8 s of media plays in 4 s of wall-clock (tape-style varispeed, one octave up). The next cue fires at the 'Drop' marker — mid-audio, not at the end.",
+      "number" : "2",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endBehavior" : "stopAndUnload",
+        "fadeInDuration" : 0.3,
+        "fadeOutDuration" : 0.5,
+        "fillMode" : "fit",
+        "geometry" : {
+          "mode" : "fillStage",
+          "scaleX" : 1,
+          "scaleY" : 1,
+          "x" : 0,
+          "y" : 0
+        },
+        "infiniteLoop" : false,
+        "layer" : 5,
+        "markers" : [
+
+        ],
+        "media" : {
+          "absolutePath" : "TestMedia\/ident-5s.mov",
+          "relativePath" : "TestMedia\/ident-5s.mov"
+        },
+        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "playCount" : 1,
+        "rate" : 0.5,
+        "startTime" : 0,
+        "type" : "video",
+        "volumeDB" : -20
+      },
+      "follow" : {
+        "mode" : "autoFollow"
+      },
+      "id" : "8BA790B4-4019-40A3-8E11-E08D44DCC911",
+      "name" : "Ident video at 0.5× (slow motion)",
+      "notes" : "This started at the marker, while cue 2 was still sounding. The video runs at half speed — 5 s of media over 10 s. Open the trim editor on cue 2 to see the marker lane.",
+      "number" : "3",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "effects" : {
+          "chromaKey" : true,
+          "chromaKeyColor" : {
+            "alpha" : 1,
+            "blue" : 0,
+            "green" : 1,
+            "red" : 0
+          },
+          "chromaSoftness" : 0.1,
+          "chromaTolerance" : 0.35,
+          "dustScale" : 1,
+          "gestureGo" : true,
+          "magicDust" : false,
+          "segmentation" : false
+        },
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 0.5,
+        "fillMode" : "fit",
+        "geometry" : {
+          "mode" : "fillStage",
+          "scaleX" : 1,
+          "scaleY" : 1,
+          "x" : 0,
+          "y" : 0
+        },
+        "layer" : 5,
+        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "type" : "camera"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "CA4F8B5F-C2BC-4BDA-8447-30C22F3881F5",
+      "name" : "Camera: chroma key + open-palm GO",
+      "notes" : "Live chroma key (green, tolerance 0.35) — stand in front of green cloth and the background drops out. Gesture GO is on: hold an open palm to the camera for 1 second and GO fires, advancing this list with no keyboard.",
+      "number" : "4",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "box" : {
+          "height" : 1,
+          "width" : 0.92,
+          "x" : 0.04,
+          "y" : 0
+        },
+        "fadeInDuration" : 0.5,
+        "fadeOutDuration" : 0.5,
+        "geometry" : {
+          "mode" : "fillStage",
+          "scaleX" : 1,
+          "scaleY" : 1,
+          "x" : 0,
+          "y" : 0
+        },
+        "layer" : 8,
+        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "plainPreview" : "REMOTE CONTROL",
+        "rtf" : "e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJ7XGZvbnR0Ymx7XGYwXGZzd2lzc1xmY2hhcnNldDAgSGVsdmV0aWNhLUJvbGQ7fX17XGNvbG9ydGJsO1xyZWQyNTVcZ3JlZW4yNTVcYmx1ZTI1NTt9XGYwXGZzMTQ0XGNmMVxxYyBSRU1PVEUgQ09OVFJPTFxwYXJcZnM2NCBNSURJICBcJ2I3ICBPU0MgIFwnYjcgIFBIT05FICBcJ2I3ICBTVEFHRSBESVNQTEFZfQ==",
+        "type" : "text"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "AC65D6BD-21DE-4998-8D40-BC0D89F898C5",
+      "name" : "Title: remote control",
+      "notes" : "Settings → Remote tab: MIDI-Learn any note or pedal, OSC on UDP 53100 (\/stagewizard\/go …), and the web remote on 53200 — scan the QR with your phone for a giant GO button. Settings → Video Outputs sets up the performer-facing stage display. All off by default.",
+      "number" : "5",
+      "preWait" : 0
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "endTime" : 12,
+        "fadeInDuration" : 1,
+        "fadeOutDuration" : 2,
+        "infiniteLoop" : false,
+        "markers" : [
+
+        ],
+        "media" : {
+          "absolutePath" : "TestMedia\/count-60s.wav",
+          "relativePath" : "TestMedia\/count-60s.wav"
+        },
+        "playCount" : 1,
+        "rate" : 1,
+        "startTime" : 0,
+        "type" : "audio",
+        "volumeDB" : -16
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "A237B7D5-B81A-49FA-AC37-6A8C8BC265A7",
+      "name" : "Preshow music — fires itself at 20:00:00",
+      "notes" : "Wall-clock trigger: while the workspace is in Show or Rehearsal mode, this cue fires by itself at 20:00:00 (once per day). Change the time in the inspector's Shortcut tab — note the clock badge in the row.",
+      "number" : "6",
+      "preWait" : 0,
+      "wallClock" : 72000
+    },
+    {
+      "armed" : true,
+      "body" : {
+        "curve" : "dbLinear",
+        "fadeOutTime" : 2,
+        "type" : "stop"
+      },
+      "follow" : {
+        "mode" : "none"
+      },
+      "id" : "F6E990FE-CE86-4AFD-99A4-D7BE6609ED25",
+      "name" : "Stop everything (2 s fade)",
+      "notes" : "The phone remote's double-tap STOP ALL does exactly this. Esc is always panic.",
+      "number" : "99",
+      "preWait" : 0
+    }
+  ],
+  "formatVersion" : 4,
+  "settings" : {
+    "armAheadCount" : 3,
+    "doubleGOProtection" : 0,
+    "keyBindings" : {
+      "go" : {
+        "keyCode" : 49,
+        "modifiers" : 0
+      },
+      "nextCue" : {
+        "keyCode" : 125,
+        "modifiers" : 0
+      },
+      "previousCue" : {
+        "keyCode" : 126,
+        "modifiers" : 0
+      }
+    },
+    "midiBindings" : [
+
+    ],
+    "midiEnabled" : false,
+    "oscEnabled" : false,
+    "oscPort" : 53100,
+    "outputGroups" : [
+      {
+        "displays" : [
+
+        ],
+        "id" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "name" : "Main",
+        "virtualCamera" : false
+      }
+    ],
+    "panicDuration" : 3,
+    "stageDisplay" : {
+      "enabled" : false,
+      "showsClock" : true,
+      "showsNotes" : true,
+      "showsRunning" : true,
+      "showsShowTimer" : true
+    },
+    "virtualCameraFeed" : false,
+    "webRemoteEnabled" : false,
+    "webRemotePort" : 53200,
+    "workspaceMode" : "rehearsal"
+  }
+}

@@ -137,11 +137,15 @@ are Developer ID signed and notarized — download, unzip, double-click.
 Without signing credentials, `package.sh` falls back to an ad-hoc build
 (right-click → Open the first time).
 
-Test media and a demo show:
+Test media and the demo shows (`Demo.stagewizard` covers the core engine;
+`FeatureTour.stagewizard` walks through the v1.6 additions cue by cue —
+rates, marker follows, chroma key + gesture GO, wall-clock triggers, with
+the notes column narrating each one):
 
 ```sh
 swift Tools/make-test-media.swift TestMedia
 open Demo.stagewizard
+open FeatureTour.stagewizard
 ```
 
 ## Architecture
