@@ -139,6 +139,20 @@ final class StageDisplayController {
         }
     }
 
+    /// D17: pure "would presenting fullscreen cover the operator's own
+    /// window" check — both ids are resolved by the caller (`AppModel`,
+    /// which owns the `DisplayManager`/`NSScreen` lookups) so this stays a
+    /// plain equality check, directly testable with no window/display
+    /// involved. Used both for the Show-mode-entry warning and (via
+    /// `AppModel.stageDisplayCoversOperatorScreen`) Preflight.
+    static func fullscreenCoversOperatorScreen(
+        matchedDisplayID: CGDirectDisplayID?,
+        operatorScreenDisplayID: CGDirectDisplayID?
+    ) -> Bool {
+        guard let matchedDisplayID, let operatorScreenDisplayID else { return false }
+        return matchedDisplayID == operatorScreenDisplayID
+    }
+
     /// Reconcile the window with the current settings, activity state, and
     /// mode. `active` must already fold in mode + `settings.enabled` +
     /// display connectivity (see `isActive`) — callers compute it once

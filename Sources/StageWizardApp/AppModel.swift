@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreGraphics
 import Observation
 
 /// Composition root: owns the document, transport, and shortcut manager and
@@ -109,6 +110,13 @@ final class AppModel {
             document.mutateWithoutUndo { $0.settings.workspaceMode = newMode }
         }
         syncStageDisplay()
+        // D17: warn (once, on entry) if the stage display just presented
+        // fullscreen over the operator's own screen — Preflight already
+        // caught this before the switch, but the operator may not have run
+        // it, and this fires unconditionally the moment it actually happens.
+        if newMode == .show, stageDisplayCoversOperatorScreen {
+            pushWarning("Stage display is covering the operator screen — press ⌘⎋ to exit Show mode.")
+        }
     }
 
     /// Preflight on entering Show mode — a quiet banner, not a blocking sheet;
@@ -119,7 +127,8 @@ final class AppModel {
             showFolder: document.showFolder,
             cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
             virtualCamFeeding: virtualCamera.isFeeding,
-            connectedDevices: AudioDeviceManager.shared.outputDevices
+            connectedDevices: AudioDeviceManager.shared.outputDevices,
+            stageDisplayCoversOperatorScreen: stageDisplayCoversOperatorScreen
         )
         guard let firstError = issues.first(where: { $0.severity == .error }) else { return }
         let more = issues.count > 1 ? " (+\(issues.count - 1) more — Settings → General → Preflight)" : ""
@@ -211,6 +220,12 @@ final class AppModel {
             return map
         }
         shortcuts.onPanic = { [weak self] in self?.transport.panic() }
+        // D17: hardwired ⌘⎋ — the only way to exit Show mode when the stage
+        // display is covering the operator's own screen. Rehearsal/Edit: no-op.
+        shortcuts.onExitShowMode = { [weak self] in
+            guard let self, self.mode == .show else { return }
+            self.setMode(.edit)
+        }
         shortcuts.onCueHotkey = { [weak self] cueID in self?.transport.fire(cueID: cueID) }
         shortcuts.onAction = { [weak self] action in self?.perform(action) }
         shortcuts.install()
@@ -524,9 +539,110 @@ final class AppModel {
         let settings = document.show.settings.stageDisplay
         let displayConnected = settings.display.flatMap { DisplayManager.shared.match($0) } != nil
         let active = StageDisplayController.isActive(mode: mode, settings: settings, displayConnected: displayConnected)
+        // `sync` registers/retires every program pane's external host layer
+        // (`syncProgramPanes`) synchronously before returning — the mirror
+        // diff below MUST run after that, never before, so a group that just
+        // entered the mirrored set already has somewhere for `attachTarget`
+        // to lease.
         stageDisplayController.sync(
             settings: settings, outputGroups: document.show.settings.outputGroups, active: active, mode: mode
         )
+        syncMirrorAttachments()
+    }
+
+    // MARK: - D17: live mirror attach/detach
+
+    /// The mirrored-group set as of the last `syncMirrorAttachments` call —
+    /// diffed against the fresh set every time so only what actually
+    /// changed (a checkbox, a window open/close, a hot-plug, a mode switch)
+    /// triggers an attach/detach, never a no-op resync (e.g. a pane
+    /// rect-only drag).
+    private var previousMirroredGroupIDs: Set<UUID> = []
+
+    /// One (running instance, output group) pair eligible for a live
+    /// mirror-attach decision — a plain value so `mirrorAttachDiff` stays
+    /// pure and directly testable with no player/registry involved.
+    struct MirrorCandidate: Hashable {
+        let instanceID: UUID
+        let groupID: UUID
+    }
+
+    /// Pure: which candidates gain/lose their mirror attachment when the
+    /// stage display's mirrored-group set moves from `previous` to
+    /// `current`. A group ENTERING the set attaches every candidate
+    /// currently on it; a group LEAVING detaches them. A group present in
+    /// both sets (or absent from both — an unrelated group's checkbox, a
+    /// pane rect-only edit) produces nothing, so an unrelated resync is
+    /// naturally a no-op. Factored out of `syncMirrorAttachments` so the
+    /// attach/detach DECISION is directly testable with no player, window,
+    /// or transport involved.
+    static func mirrorAttachDiff(
+        previousGroupIDs: Set<UUID>,
+        currentGroupIDs: Set<UUID>,
+        candidates: [MirrorCandidate]
+    ) -> (attach: [MirrorCandidate], detach: [MirrorCandidate]) {
+        guard previousGroupIDs != currentGroupIDs else { return ([], []) }
+        let entered = currentGroupIDs.subtracting(previousGroupIDs)
+        let left = previousGroupIDs.subtracting(currentGroupIDs)
+        return (
+            candidates.filter { entered.contains($0.groupID) },
+            candidates.filter { left.contains($0.groupID) }
+        )
+    }
+
+    /// Diff the stage display's CURRENT mirrored-group set against the
+    /// previous snapshot and attach/detach every RUNNING (or paused, or
+    /// fading, or holding — anything with a live player that hasn't
+    /// terminated) instance whose cue's output group entered/left it. This
+    /// is what makes checking a mirror box, opening the stage display, or a
+    /// display hot-plug show already-playing content immediately instead of
+    /// only at the next arm (D17).
+    private func syncMirrorAttachments() {
+        let current = stageDisplayController.mirroredProgramGroupIDs
+        defer { previousMirroredGroupIDs = current }
+
+        var instancesByID: [UUID: CueInstance] = [:]
+        var candidates: [MirrorCandidate] = []
+        for instance in transport.registry.instances {
+            guard instance.player != nil, !instance.state.isTerminal,
+                  let groupID = instance.cue.body.outputGroupID else { continue }
+            instancesByID[instance.id] = instance
+            candidates.append(MirrorCandidate(instanceID: instance.id, groupID: groupID))
+        }
+
+        let diff = Self.mirrorAttachDiff(
+            previousGroupIDs: previousMirroredGroupIDs, currentGroupIDs: current, candidates: candidates
+        )
+        for candidate in diff.attach {
+            instancesByID[candidate.instanceID]?.player?.attachTarget(StageDisplayController.programTarget(for: candidate.groupID))
+        }
+        for candidate in diff.detach {
+            instancesByID[candidate.instanceID]?.player?.detachTarget(StageDisplayController.programTarget(for: candidate.groupID))
+        }
+    }
+
+    /// D17: true when the stage display, if it presented fullscreen right
+    /// now, would land on the SAME physical display as the operator's own
+    /// window — used by both the Show-mode-entry warning (`setMode`) and
+    /// Preflight. The only place mode/display/window state gets resolved
+    /// into the bool each of those consumes, so `Preflight.run` itself
+    /// stays pure.
+    var stageDisplayCoversOperatorScreen: Bool {
+        let settings = document.show.settings.stageDisplay
+        guard settings.enabled, let fingerprint = settings.display,
+              let matched = DisplayManager.shared.match(fingerprint) else { return false }
+        return StageDisplayController.fullscreenCoversOperatorScreen(
+            matchedDisplayID: matched.displayID, operatorScreenDisplayID: operatorScreenDisplayID
+        )
+    }
+
+    /// The physical display hosting the operator's own (real, key-able)
+    /// window — every StageWizard-owned output/preview/stage-display window
+    /// refuses `canBecomeMain`, so `NSApp.mainWindow` always resolves to the
+    /// operator's real window when one exists.
+    private var operatorScreenDisplayID: CGDirectDisplayID? {
+        guard let screen = NSApp.mainWindow?.screen else { return nil }
+        return DisplayManager.connectedDisplay(for: screen)?.displayID
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

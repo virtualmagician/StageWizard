@@ -52,6 +52,25 @@ public enum CueBody: Hashable, Sendable {
         case .broken: return "Broken"
         }
     }
+
+    /// The output group this cue's visual output targets — every kind that
+    /// carries `outputGroupID` (video/camera/image/text/slide); nil for
+    /// audio/fade/stop/group/broken, and nil for a video/camera cue still on
+    /// the legacy direct-`display` assignment (no group at all). D17: the
+    /// single place that extracts a cue's group id, shared by the live
+    /// mirror-attach diff (`AppModel.syncMirrorAttachments`) and anywhere
+    /// else that needs it — mirrors exactly the `groupID` `EngineBridge`
+    /// resolves targets against at arm time.
+    public var outputGroupID: UUID? {
+        switch self {
+        case .video(let body): return body.outputGroupID
+        case .camera(let body): return body.outputGroupID
+        case .image(let body): return body.outputGroupID
+        case .text(let body): return body.outputGroupID
+        case .slide(let body): return body.outputGroupID
+        case .audio, .fade, .stop, .group, .broken: return nil
+        }
+    }
 }
 
 extension CueBody: Codable {

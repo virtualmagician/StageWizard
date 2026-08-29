@@ -53,6 +53,15 @@ public final class VideoCuePlayer: MediaPlayback {
     let player: AVQueuePlayer
     /// One layer per target display — a group can mirror onto several.
     let playerLayers: [AVPlayerLayer]
+    /// D17: layers attached LIVE after arm via `attachTarget` (mirror
+    /// checkbox ticked, stage display opened, program pane re-enabled) —
+    /// tracked separately from `playerLayers` so `detachTarget`/`stop`
+    /// release exactly what they leased and nothing else.
+    private var extraLayers: [OutputTarget: AVPlayerLayer] = [:]
+    /// `playerLayers` + any live-attached extras — every live-update method
+    /// (geometry, render layer, opacity) drives this so a mirrored target
+    /// stays in lockstep with the arm-time ones.
+    private var allLayers: [AVPlayerLayer] { extraLayers.isEmpty ? playerLayers : playerLayers + Array(extraLayers.values) }
     private let originalItem: AVPlayerItem
     private let looper: AVPlayerLooper?
 
@@ -439,7 +448,7 @@ public final class VideoCuePlayer: MediaPlayback {
         fillModeSetting = fillMode
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in playerLayers {
+        for layer in allLayers {
             geometry.apply(to: layer, fillMode: fillMode)
         }
         CATransaction.commit()
@@ -450,10 +459,52 @@ public final class VideoCuePlayer: MediaPlayback {
         guard !stopped else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in playerLayers {
+        for layer in allLayers {
             layer.zPosition = CGFloat(value)
         }
         CATransaction.commit()
+    }
+
+    // MARK: - D17: live mirror attach/detach
+
+    /// Lease `target`'s host layer, add a SECOND `AVPlayerLayer` on the same
+    /// `AVQueuePlayer` (one decode, N presentations — exactly how the
+    /// operator-UI preview layer already works), and match it to the cue's
+    /// current fill mode/geometry/render layer/opacity. Idempotent.
+    public func attachTarget(_ target: OutputTarget) {
+        guard !stopped, extraLayers[target] == nil, !targets.contains(target) else { return }
+        guard let host = try? OutputWindowManager.shared.hostLayer(for: target) else { return }
+
+        // Mid-fade-safe: read the PRESENTATION opacity of an existing layer
+        // (falls back to the model value when nothing is animating) so an
+        // attach mid-fade-in/out shows the picture at its current level
+        // instead of popping to fully opaque or invisible.
+        let currentOpacity = (playerLayers.first?.presentation() ?? playerLayers.first)?.opacity ?? 0
+        let currentZ = playerLayers.first?.zPosition ?? 5   // matches every body's default render layer
+
+        let layer = AVPlayerLayer(player: player)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = host.bounds
+        layer.opacity = currentOpacity
+        layer.zPosition = currentZ
+        host.addSublayer(layer)
+        geometrySetting.apply(to: layer, fillMode: fillModeSetting)
+        CATransaction.commit()
+
+        extraLayers[target] = layer
+    }
+
+    /// Remove a layer `attachTarget` added and release its host lease.
+    /// Idempotent — a target never attached (or already detached) no-ops.
+    public func detachTarget(_ target: OutputTarget) {
+        guard let layer = extraLayers.removeValue(forKey: target) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAllAnimations()
+        layer.removeFromSuperlayer()
+        CATransaction.commit()
+        OutputWindowManager.shared.releaseLayer(for: target)
     }
 
     // MARK: - Preview
@@ -598,7 +649,7 @@ public final class VideoCuePlayer: MediaPlayback {
         outputTornDown = true
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in playerLayers {
+        for layer in allLayers {
             layer.removeAllAnimations()
             layer.removeFromSuperlayer()
         }
@@ -607,6 +658,8 @@ public final class VideoCuePlayer: MediaPlayback {
         player.removeAllItems() // AVQueuePlayer's replaceCurrentItem(nil)
         CATransaction.commit()
         for target in targets { OutputWindowManager.shared.releaseLayer(for: target) }
+        for target in extraLayers.keys { OutputWindowManager.shared.releaseLayer(for: target) }
+        extraLayers.removeAll()
     }
 
     // MARK: - Fades
@@ -648,7 +701,7 @@ public final class VideoCuePlayer: MediaPlayback {
             }
         }
         if duration > 0 {
-            for layer in playerLayers {
+            for layer in allLayers {
                 let fromValue = (layer.presentation() ?? layer).opacity
                 let animation = CABasicAnimation(keyPath: "opacity")
                 animation.fromValue = fromValue
@@ -660,7 +713,7 @@ public final class VideoCuePlayer: MediaPlayback {
             }
         } else {
             CATransaction.setDisableActions(true)
-            for layer in playerLayers {
+            for layer in allLayers {
                 layer.removeAnimation(forKey: Self.opacityAnimationKey)
                 layer.opacity = target
             }

@@ -773,4 +773,145 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(app.document.show.settings.stageDisplay.display, fingerprint)
         XCTAssertFalse(app.document.show.settings.stageDisplay.pane(.notes).enabled)
     }
+
+    // MARK: - D17: CueBody.outputGroupID (single extraction point for the live-mirror diff)
+
+    func testCueBodyOutputGroupIDForEveryVisualKind() {
+        let groupID = UUID()
+        XCTAssertEqual(CueBody.video(VideoBody(media: MediaReference(absolutePath: "/f.mov"), outputGroupID: groupID)).outputGroupID, groupID)
+        XCTAssertEqual(CueBody.camera(CameraBody(outputGroupID: groupID)).outputGroupID, groupID)
+        XCTAssertEqual(CueBody.image(ImageBody(media: MediaReference(absolutePath: "/f.png"), outputGroupID: groupID)).outputGroupID, groupID)
+        XCTAssertEqual(CueBody.text(TextBody(rtf: Data(), outputGroupID: groupID)).outputGroupID, groupID)
+        XCTAssertEqual(CueBody.slide(SlideBody(media: MediaReference(absolutePath: "/f.png"), outputGroupID: groupID)).outputGroupID, groupID)
+    }
+
+    func testCueBodyOutputGroupIDNilForEveryNonVisualKindAndUnassignedVisualCues() {
+        XCTAssertNil(CueBody.audio(AudioBody(media: MediaReference(absolutePath: "/f.wav"))).outputGroupID)
+        XCTAssertNil(CueBody.fade(FadeBody()).outputGroupID)
+        XCTAssertNil(CueBody.stop(StopBody()).outputGroupID)
+        XCTAssertNil(CueBody.group(GroupBody()).outputGroupID)
+        XCTAssertNil(CueBody.broken(BrokenBody(originalType: "hologram")).outputGroupID)
+        // A visual cue with no group assigned yet — nil, not a crash.
+        XCTAssertNil(CueBody.video(VideoBody(media: MediaReference(absolutePath: "/f.mov"))).outputGroupID)
+    }
+
+    // MARK: - D17: AppModel.mirrorAttachDiff (pure live mirror attach/detach decision)
+
+    func testMirrorAttachDiffAttachesCandidatesOfAGroupThatEnteredTheSet() {
+        let group = UUID()
+        let instance = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [],
+            currentGroupIDs: [group],
+            candidates: [AppModel.MirrorCandidate(instanceID: instance, groupID: group)]
+        )
+        XCTAssertEqual(diff.attach, [AppModel.MirrorCandidate(instanceID: instance, groupID: group)])
+        XCTAssertTrue(diff.detach.isEmpty)
+    }
+
+    func testMirrorAttachDiffDetachesCandidatesOfAGroupThatLeftTheSet() {
+        let group = UUID()
+        let instance = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [group],
+            currentGroupIDs: [],
+            candidates: [AppModel.MirrorCandidate(instanceID: instance, groupID: group)]
+        )
+        XCTAssertTrue(diff.attach.isEmpty)
+        XCTAssertEqual(diff.detach, [AppModel.MirrorCandidate(instanceID: instance, groupID: group)])
+    }
+
+    func testMirrorAttachDiffIgnoresAGroupPresentInBothSets() {
+        // The mirrored set is unchanged (e.g. a program pane's rect-only
+        // drag) — no churn even though a candidate exists on that group.
+        let group = UUID()
+        let instance = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [group],
+            currentGroupIDs: [group],
+            candidates: [AppModel.MirrorCandidate(instanceID: instance, groupID: group)]
+        )
+        XCTAssertTrue(diff.attach.isEmpty)
+        XCTAssertTrue(diff.detach.isEmpty)
+    }
+
+    func testMirrorAttachDiffIgnoresCandidatesOfAnUnrelatedGroup() {
+        // groupA enters the set, but the only running candidate is on groupB.
+        let groupA = UUID()
+        let groupB = UUID()
+        let instance = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [],
+            currentGroupIDs: [groupA],
+            candidates: [AppModel.MirrorCandidate(instanceID: instance, groupID: groupB)]
+        )
+        XCTAssertTrue(diff.attach.isEmpty)
+        XCTAssertTrue(diff.detach.isEmpty)
+    }
+
+    func testMirrorAttachDiffHandlesSeveralGroupsChangingAtOnceIndependently() {
+        let entering = UUID()
+        let leaving = UUID()
+        let unrelated = UUID()
+        let enteringInstance = UUID()
+        let leavingInstance = UUID()
+        let unrelatedInstance = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [leaving, unrelated],
+            currentGroupIDs: [entering, unrelated],
+            candidates: [
+                AppModel.MirrorCandidate(instanceID: enteringInstance, groupID: entering),
+                AppModel.MirrorCandidate(instanceID: leavingInstance, groupID: leaving),
+                AppModel.MirrorCandidate(instanceID: unrelatedInstance, groupID: unrelated),
+            ]
+        )
+        XCTAssertEqual(diff.attach, [AppModel.MirrorCandidate(instanceID: enteringInstance, groupID: entering)])
+        XCTAssertEqual(diff.detach, [AppModel.MirrorCandidate(instanceID: leavingInstance, groupID: leaving)])
+    }
+
+    func testMirrorAttachDiffNoOpWhenSetsAreIdentical() {
+        // Stage-display close-then-immediately-reopen with nothing mirrored,
+        // or any resync where nothing actually changed.
+        let diff = AppModel.mirrorAttachDiff(previousGroupIDs: [], currentGroupIDs: [], candidates: [])
+        XCTAssertTrue(diff.attach.isEmpty)
+        XCTAssertTrue(diff.detach.isEmpty)
+    }
+
+    func testMirrorAttachDiffDetachesEveryMirroredGroupOnStageDisplayClose() {
+        // `syncMirrorAttachments` calls this with an EMPTY current set on
+        // close — every group that was mirrored must detach.
+        let groupA = UUID()
+        let groupB = UUID()
+        let instanceA = UUID()
+        let instanceB = UUID()
+        let diff = AppModel.mirrorAttachDiff(
+            previousGroupIDs: [groupA, groupB],
+            currentGroupIDs: [],
+            candidates: [
+                AppModel.MirrorCandidate(instanceID: instanceA, groupID: groupA),
+                AppModel.MirrorCandidate(instanceID: instanceB, groupID: groupB),
+            ]
+        )
+        XCTAssertTrue(diff.attach.isEmpty)
+        XCTAssertEqual(Set(diff.detach), Set([
+            AppModel.MirrorCandidate(instanceID: instanceA, groupID: groupA),
+            AppModel.MirrorCandidate(instanceID: instanceB, groupID: groupB),
+        ]))
+    }
+
+    // MARK: - D17: StageDisplayController.fullscreenCoversOperatorScreen
+
+    func testFullscreenCoversOperatorScreenTrueWhenIDsMatch() {
+        XCTAssertTrue(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: 42, operatorScreenDisplayID: 42))
+    }
+
+    func testFullscreenCoversOperatorScreenFalseWhenIDsDiffer() {
+        XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: 42, operatorScreenDisplayID: 7))
+    }
+
+    func testFullscreenCoversOperatorScreenFalseWhenEitherIDIsNil() {
+        XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: nil, operatorScreenDisplayID: 42))
+        XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: 42, operatorScreenDisplayID: nil))
+        XCTAssertFalse(StageDisplayController.fullscreenCoversOperatorScreen(matchedDisplayID: nil, operatorScreenDisplayID: nil))
+    }
 }

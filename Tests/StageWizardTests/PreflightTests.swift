@@ -244,4 +244,35 @@ final class PreflightTests: XCTestCase {
         )
         XCTAssertTrue(issues.isEmpty, "\(issues)")
     }
+
+    // MARK: - D17: operator-screen collision warning
+
+    func testStageDisplayCoveringOperatorScreenProducesAWarning() {
+        let issues = Preflight.run(
+            show: ShowFile(), showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false,
+            connectedDevices: [], stageDisplayCoversOperatorScreen: true
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .warning)
+        XCTAssertNil(issues.first?.cueNumber, "show-wide, not tied to a cue")
+        XCTAssertTrue(issues.first?.message.contains("operator's own screen") ?? false)
+    }
+
+    func testStageDisplayNotCoveringOperatorScreenProducesNoWarning() {
+        let issues = Preflight.run(
+            show: ShowFile(), showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false,
+            connectedDevices: [], stageDisplayCoversOperatorScreen: false
+        )
+        XCTAssertTrue(issues.isEmpty, "\(issues)")
+    }
+
+    func testStageDisplayCollisionWarningDefaultsToFalseWhenOmitted() {
+        // Existing call sites (and every other test above) don't pass this
+        // parameter at all — it must default to "no collision", not crash
+        // or silently warn.
+        let issues = Preflight.run(
+            show: ShowFile(), showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "\(issues)")
+    }
 }

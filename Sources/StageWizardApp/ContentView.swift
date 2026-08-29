@@ -109,7 +109,7 @@ struct ModeBar: View {
             .frame(width: 230)
             // The selected segment wears the tint — red while LIVE.
             .tint(app.mode == .show ? Theme.panic : Theme.accent)
-            .help("Show locks editing (⌘E). Rehearsal keeps editing and routes video into floating preview windows (⌘R). GO, panic, and the Active Cues panel always stay live.")
+            .help("Show locks editing (⌘E). Rehearsal keeps editing and routes video into floating preview windows (⌘R). GO, panic, and the Active Cues panel always stay live. ⌘⎋ always exits Show mode.")
 
             switch app.mode {
             case .edit:

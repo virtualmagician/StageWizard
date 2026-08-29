@@ -114,7 +114,8 @@ private struct GeneralSettingsTab: View {
             showFolder: document.showFolder,
             cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
             virtualCamFeeding: app.virtualCamera.isFeeding,
-            connectedDevices: AudioDeviceManager.shared.outputDevices
+            connectedDevices: AudioDeviceManager.shared.outputDevices,
+            stageDisplayCoversOperatorScreen: app.stageDisplayCoversOperatorScreen
         )
     }
 }
@@ -247,7 +248,7 @@ private struct OutputGroupsTab: View {
 
             HStack(spacing: 10) {
                 Button("Edit Layout…") { showingLayoutEditor = true }
-                Text("A performer-facing view — never a cue output. Shows in Show and Rehearsal modes. A program view only picks up cues that arm AFTER it's turned on.")
+                Text("A performer-facing view — never a cue output. Shows in Show and Rehearsal modes. Mirroring picks up already-running cues immediately. ⌘⎋ always exits Show mode.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }

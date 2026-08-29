@@ -24,6 +24,11 @@ public final class StillCuePlayer: MediaPlayback {
     public var displayIDs: [CGDirectDisplayID] { targets.compactMap(\.displayID) }
 
     private let layers: [CALayer]
+    /// D17: layers attached LIVE after arm (mirror checkbox ticked, stage
+    /// display opened, program pane re-enabled) — tracked separately from
+    /// `layers` so `detachTarget`/`stop` release exactly what they leased.
+    private var extraLayers: [OutputTarget: CALayer] = [:]
+    private var allLayers: [CALayer] { extraLayers.isEmpty ? layers : layers + Array(extraLayers.values) }
     private var fillModeSetting: FillMode
     private var geometrySetting: VideoGeometry
     private let fadeInDuration: TimeInterval
@@ -176,7 +181,7 @@ public final class StillCuePlayer: MediaPlayback {
         thenStopTask?.cancel()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in layers {
+        for layer in allLayers {
             layer.removeAllAnimations()
             layer.removeFromSuperlayer()
         }
@@ -184,6 +189,10 @@ public final class StillCuePlayer: MediaPlayback {
         for target in targets {
             OutputWindowManager.shared.releaseLayer(for: target)
         }
+        for target in extraLayers.keys {
+            OutputWindowManager.shared.releaseLayer(for: target)
+        }
+        extraLayers.removeAll()
         if !finishedFired {
             finishedFired = true
             onFinished?(.stopped)
@@ -223,7 +232,7 @@ public final class StillCuePlayer: MediaPlayback {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in layers {
+        for layer in allLayers {
             layer.contentsGravity = gravity
             layer.transform = geometry.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
         }
@@ -235,14 +244,53 @@ public final class StillCuePlayer: MediaPlayback {
         guard !stopped else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in layers {
+        for layer in allLayers {
             layer.zPosition = CGFloat(value)
         }
         CATransaction.commit()
     }
 
+    // MARK: - D17: live mirror attach/detach
+
+    /// Lease `target`'s host layer and add a new content layer showing the
+    /// SAME already-rendered image, matching the cue's current fill mode/
+    /// geometry/render layer/opacity. Idempotent.
+    public func attachTarget(_ target: OutputTarget) {
+        guard !stopped, extraLayers[target] == nil, !targets.contains(target) else { return }
+        guard let host = try? OutputWindowManager.shared.hostLayer(for: target) else { return }
+
+        let currentOpacity = (layers.first?.presentation() ?? layers.first)?.opacity ?? 0
+        let currentZ = layers.first?.zPosition ?? 5   // matches ImageBody/SlideBody's default render layer
+
+        let layer = CALayer()
+        layer.contents = layers.first?.contents
+        layer.contentsGravity = layers.first?.contentsGravity ?? .resizeAspect
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.frame = host.bounds
+        layer.opacity = currentOpacity
+        layer.zPosition = currentZ
+        host.addSublayer(layer)
+        layer.transform = geometrySetting.transform(stageSize: layer.superlayer?.bounds.size ?? layer.bounds.size)
+        CATransaction.commit()
+
+        extraLayers[target] = layer
+    }
+
+    /// Remove a layer `attachTarget` added and release its host lease.
+    /// Idempotent.
+    public func detachTarget(_ target: OutputTarget) {
+        guard let layer = extraLayers.removeValue(forKey: target) else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.removeAllAnimations()
+        layer.removeFromSuperlayer()
+        CATransaction.commit()
+        OutputWindowManager.shared.releaseLayer(for: target)
+    }
+
     private func animateOpacity(to value: Float, duration: TimeInterval) {
-        for layer in layers {
+        for layer in allLayers {
             let animation = CABasicAnimation(keyPath: "opacity")
             animation.fromValue = layer.presentation()?.opacity ?? layer.opacity
             animation.toValue = value

@@ -7,10 +7,16 @@ import AppKit
 public final class ShortcutManager {
     /// Esc — hardwired to panic, never reassignable — panic must always work.
     public static let panicKeyCode: UInt16 = 53
+    /// ⌘Esc — hardwired to exit Show mode, never reassignable, never a
+    /// `ShortcutAction` — the one guaranteed way out when a fullscreen stage
+    /// display is covering the operator's own screen (D17).
+    public static let exitShowModeModifiers = NSEvent.ModifierFlags.command
 
     public var onAction: (@MainActor (ShortcutAction) -> Void)?
     public var onCueHotkey: (@MainActor (UUID) -> Void)?
     public var onPanic: (@MainActor () -> Void)?
+    /// ⌘Esc — see `exitShowModeModifiers`.
+    public var onExitShowMode: (@MainActor () -> Void)?
 
     /// Live lookup tables — provided by the app so edits apply instantly.
     public var bindingsProvider: @MainActor () -> [ShortcutAction: KeyBinding] = { [:] }
@@ -73,10 +79,18 @@ public final class ShortcutManager {
         // a sheet/modal is up, or a key is auto-repeating.
         if shouldPassThrough(event) { return event }
 
-        // Esc = panic, hardcoded, plain Esc only.
-        if event.keyCode == Self.panicKeyCode && binding.modifiers == 0 {
-            onPanic?()
-            return nil
+        // Esc = panic, hardcoded, plain Esc only. ⌘Esc = exit Show mode,
+        // same hardcoding — both physical-key-53, split by modifier so
+        // there's no ambiguity between them.
+        if event.keyCode == Self.panicKeyCode {
+            if binding.modifiers == 0 {
+                onPanic?()
+                return nil
+            }
+            if binding.modifiers == Self.exitShowModeModifiers.rawValue {
+                onExitShowMode?()
+                return nil
+            }
         }
 
         if let (action, _) = bindingsProvider().first(where: { $0.value == binding }) {

@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import QuartzCore
 @testable import StageWizard
 
 @MainActor
@@ -246,6 +247,77 @@ final class V7Tests: XCTestCase {
         XCTAssertNotNil(host?.sublayers?.first?.contents)
         player.stop()
         XCTAssertNil(OutputWindowManager.shared.window(for: target), "lease released")
+    }
+
+    // MARK: - D17: live mirror attach/detach — headless (registered external hosts, no windows)
+
+    func testTextPlayerAttachTargetLiveMirrorsOntoARegisteredExternalHostWithNoWindow() async throws {
+        let targetA = OutputTarget.preview(id: UUID(), title: "Mirror A")
+        let targetB = OutputTarget.preview(id: UUID(), title: "Mirror B")
+        let hostA = CALayer()
+        let hostB = CALayer()
+        OutputWindowManager.shared.registerExternalHost(hostA, for: targetA)
+        OutputWindowManager.shared.registerExternalHost(hostB, for: targetB)
+        defer {
+            OutputWindowManager.shared.unregisterExternalHost(for: targetA)
+            OutputWindowManager.shared.unregisterExternalHost(for: targetB)
+        }
+
+        let body = TextBody(rtf: makeRTF("Live Mirror"))
+        let player = try await TextCuePlayer.arm(body: body, targets: [targetA])
+        XCTAssertEqual(hostA.sublayers?.count, 1, "the arm-time target gets its layer immediately")
+        XCTAssertNil(hostB.sublayers, "B untouched before any attach")
+
+        // Live attach: B gains a layer carrying the SAME already-rendered
+        // bitmap, with no re-arm and no restart.
+        player.attachTarget(targetB)
+        XCTAssertEqual(hostB.sublayers?.count, 1, "attach adds exactly one layer")
+        XCTAssertNotNil(hostB.sublayers?.first?.contents, "carries the already-rendered bitmap")
+        if let contentsA = hostA.sublayers?.first?.contents, let contentsB = hostB.sublayers?.first?.contents {
+            XCTAssertTrue((contentsA as AnyObject) === (contentsB as AnyObject), "attach carries the SAME rendered bitmap object, not a re-render")
+        } else {
+            XCTFail("both hosts should have rendered contents")
+        }
+
+        // Idempotent: attaching an already-attached target changes nothing.
+        player.attachTarget(targetB)
+        XCTAssertEqual(hostB.sublayers?.count, 1, "double attach must not duplicate the layer")
+
+        // Live detach: B's layer is gone; A (the arm-time target) is untouched.
+        player.detachTarget(targetB)
+        XCTAssertNil(hostB.sublayers, "detach removes the layer (CALayer.sublayers is nil, not [], once empty)")
+        XCTAssertEqual(hostA.sublayers?.count, 1, "detaching a MIRROR target must not touch the arm-time target")
+
+        // A second detach of an already-detached target is a harmless no-op.
+        player.detachTarget(targetB)
+        XCTAssertNil(hostB.sublayers)
+
+        // stop() cleans up the arm-time layer exactly like an attached one.
+        player.stop()
+        XCTAssertNil(hostA.sublayers, "stop releases the arm-time layer too")
+    }
+
+    func testTextPlayerStopClearsBothArmTimeAndLiveAttachedLayers() async throws {
+        let targetA = OutputTarget.preview(id: UUID(), title: "Mirror A")
+        let targetB = OutputTarget.preview(id: UUID(), title: "Mirror B")
+        let hostA = CALayer()
+        let hostB = CALayer()
+        OutputWindowManager.shared.registerExternalHost(hostA, for: targetA)
+        OutputWindowManager.shared.registerExternalHost(hostB, for: targetB)
+        defer {
+            OutputWindowManager.shared.unregisterExternalHost(for: targetA)
+            OutputWindowManager.shared.unregisterExternalHost(for: targetB)
+        }
+
+        let body = TextBody(rtf: makeRTF("Stop Cleans Both"))
+        let player = try await TextCuePlayer.arm(body: body, targets: [targetA])
+        player.attachTarget(targetB)
+        XCTAssertEqual(hostA.sublayers?.count, 1)
+        XCTAssertEqual(hostB.sublayers?.count, 1)
+
+        player.stop()
+        XCTAssertNil(hostA.sublayers, "arm-time layer released")
+        XCTAssertNil(hostB.sublayers, "live-attached layer released too, without a separate detachTarget call")
     }
 
     func testStillPlayerAppliesRenderLayerToZPosition() async throws {

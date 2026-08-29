@@ -52,8 +52,26 @@ public protocol MediaPlayback: AnyObject {
     func fadeOpacity(to opacity: Double, duration: TimeInterval)
     /// Leave an infinite/counted loop after the current pass completes.
     func exitLoop()
+
+    /// D17: attach an ADDITIONAL live-mirror output while this instance is
+    /// already running (or paused) — a mirror checkbox just ticked, the
+    /// stage display just opened, or a program pane just re-enabled. Builds
+    /// a new content layer/container hosted at `target` matching the cue's
+    /// CURRENT geometry/fill-mode/render-layer/opacity so a mid-fade attach
+    /// looks right immediately, with no restart. Visual-only — never touches
+    /// the fade/no-click contract. Idempotent: attaching an already-attached
+    /// target (or one of the targets armed at fire time) is a no-op. Audio
+    /// and other non-visual players never override the default no-op below.
+    func attachTarget(_ target: OutputTarget)
+    /// D17: detach a target `attachTarget` added — mirror checkbox
+    /// unticked, stage display closed, program pane disabled. Targets armed
+    /// at fire time are NOT reachable here; those release only via `stop()`.
+    /// Idempotent.
+    func detachTarget(_ target: OutputTarget)
 }
 
 extension MediaPlayback {
     public func fadeOpacity(to opacity: Double, duration: TimeInterval) {}
+    public func attachTarget(_ target: OutputTarget) {}
+    public func detachTarget(_ target: OutputTarget) {}
 }

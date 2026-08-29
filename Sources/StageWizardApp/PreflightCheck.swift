@@ -31,7 +31,8 @@ enum Preflight {
         showFolder: URL?,
         cameraAuthorized: Bool,
         virtualCamFeeding: Bool,
-        connectedDevices: [AudioOutputDevice]
+        connectedDevices: [AudioOutputDevice],
+        stageDisplayCoversOperatorScreen: Bool = false
     ) -> [PreflightIssue] {
         var issues: [PreflightIssue] = []
         // Ordered (not a Set) so issue order is stable — nice for tests and
@@ -106,6 +107,18 @@ enum Preflight {
                 cueNumber: nil,
                 message: "Camera access is not authorized — camera cues will fail.",
                 severity: .error
+            ))
+        }
+
+        // D17: the stage display is set to the SAME screen as the operator's
+        // own window — Show mode will bury the console under it. Not an
+        // error (the show still plays fine; ⌘⎋ always recovers), but worth
+        // catching before the operator finds out live.
+        if stageDisplayCoversOperatorScreen {
+            issues.append(PreflightIssue(
+                cueNumber: nil,
+                message: "Stage display is set to the operator's own screen — Show mode will cover your controls (⌘⎋ always exits).",
+                severity: .warning
             ))
         }
 

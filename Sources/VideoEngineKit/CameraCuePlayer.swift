@@ -94,7 +94,17 @@ public final class CameraCuePlayer: MediaPlayback {
     private var session: AVCaptureSession { sessionBox.session }
     /// One container per target display (groups can mirror).
     private let targetLayers: [TargetLayers]
-    private var containers: [CALayer] { targetLayers.map(\.container) }
+    /// D17: targets attached LIVE after arm (mirror checkbox ticked, stage
+    /// display opened, program pane re-enabled) — an ORDERED list (not a
+    /// dictionary) because `handEmitters` below is index-aligned with
+    /// `allTargetLayers` and iteration order must be deterministic.
+    private var attachedExtras: [(target: OutputTarget, layers: TargetLayers)] = []
+    /// `targetLayers` + any live-attached extras, arm-time entries first —
+    /// every per-target loop (effects, geometry, render layer, dust,
+    /// opacity) drives this so a mirrored target stays in lockstep.
+    private var allTargetLayers: [TargetLayers] { attachedExtras.isEmpty ? targetLayers : targetLayers + attachedExtras.map(\.layers) }
+    private var allTargets: [OutputTarget] { attachedExtras.isEmpty ? targets : targets + attachedExtras.map(\.target) }
+    private var containers: [CALayer] { allTargetLayers.map(\.container) }
     private let processor = CameraFrameProcessor()
     /// True when the processor must flip frames itself (mirroring couldn't
     /// be pushed down into the capture connection).
@@ -339,13 +349,21 @@ public final class CameraCuePlayer: MediaPlayback {
         guard !stopped, effects.anyEnabled else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers {
+        for entry in allTargetLayers {
             entry.content.contents = product.image
         }
         CATransaction.commit()
         updateHandEmitters(hands: product.hands, bufferSize: product.bufferSize)
     }
 
+    /// Rebuilds EVERY target's dust emitters from scratch (arm-time targets
+    /// AND any live-attached extras) — called on every effects edit already,
+    /// and reused by `attachTarget`/`detachTarget` for simplicity. A brief
+    /// reset of in-flight dust particles on already-running targets when a
+    /// new mirror attaches mid-show is an accepted tradeoff (D17) for
+    /// keeping `handEmitters`' index-alignment with `allTargetLayers` simple
+    /// and always correct, rather than surgically inserting/removing one
+    /// target's pair.
     private func rebuildDustEmitters() {
         for emitters in handEmitters {
             for emitter in emitters { emitter.removeFromSuperlayer() }
@@ -359,7 +377,7 @@ public final class CameraCuePlayer: MediaPlayback {
             ?? PEXEmitterConfig.builtinSparkle()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers {
+        for entry in allTargetLayers {
             var emitters: [CAEmitterLayer] = []
             for _ in 0..<2 {
                 let emitter = config.makeEmitterLayer(sizeScale: effects.dustScale)
@@ -393,7 +411,7 @@ public final class CameraCuePlayer: MediaPlayback {
         let mappingFill: FillMode = geometrySetting.mode == .custom ? .fit : fillModeSetting
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (targetIndex, entry) in targetLayers.enumerated() {
+        for (targetIndex, entry) in allTargetLayers.enumerated() {
             let emitters = handEmitters[targetIndex]
             for (index, emitter) in emitters.enumerated() {
                 if let hand = smoothedHands[index] {
@@ -432,7 +450,7 @@ public final class CameraCuePlayer: MediaPlayback {
     private func setProcessedMode(_ processed: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers {
+        for entry in allTargetLayers {
             entry.preview.isHidden = processed
             entry.content.isHidden = !processed
             if !processed {
@@ -453,7 +471,7 @@ public final class CameraCuePlayer: MediaPlayback {
         let gravity = geometry.gravity(fillMode: fillMode)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers {
+        for entry in allTargetLayers {
             geometry.apply(to: entry.container, fillMode: fillMode)
             entry.preview.videoGravity = gravity
             entry.content.contentsGravity = Self.contentsGravity(for: gravity)
@@ -466,10 +484,73 @@ public final class CameraCuePlayer: MediaPlayback {
         guard !stopped else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers {
+        for entry in allTargetLayers {
             entry.container.zPosition = CGFloat(value)
         }
         CATransaction.commit()
+    }
+
+    // MARK: - D17: live mirror attach/detach
+
+    /// Lease `target`'s host layer and build a new container (preview +
+    /// content siblings, same shape as `init`'s per-target construction)
+    /// matching the cue's CURRENT effects mode/fill mode/geometry/render
+    /// layer/opacity, then rebuild dust emitters so the new target gets its
+    /// own pair too. Idempotent.
+    public func attachTarget(_ target: OutputTarget) {
+        guard !stopped, !allTargets.contains(target) else { return }
+        guard let host = try? OutputWindowManager.shared.hostLayer(for: target) else { return }
+
+        // Mid-fade-safe: read the PRESENTATION opacity of an existing
+        // container (falls back to its model value) so an attach mid-fade
+        // shows the picture at its current level instead of popping.
+        let currentOpacity = (targetLayers.first?.container.presentation() ?? targetLayers.first?.container)?.opacity ?? 0
+        let currentZ = targetLayers.first?.container.zPosition ?? 5   // matches CameraBody's default render layer
+        let gravity = geometrySetting.gravity(fillMode: fillModeSetting)
+        let processed = effects.anyEnabled
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let container = CALayer()
+        container.frame = host.bounds
+        container.opacity = currentOpacity
+        container.zPosition = currentZ
+
+        let preview = AVCaptureVideoPreviewLayer(session: session)
+        preview.videoGravity = gravity
+        preview.frame = container.bounds
+        preview.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        preview.isHidden = processed
+        container.addSublayer(preview)
+
+        let content = CALayer()
+        content.contentsGravity = Self.contentsGravity(for: gravity)
+        content.isOpaque = false
+        content.frame = container.bounds
+        content.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
+        content.isHidden = !processed
+        container.addSublayer(content)
+
+        host.addSublayer(container)
+        geometrySetting.apply(to: container, fillMode: fillModeSetting)
+        CATransaction.commit()
+
+        attachedExtras.append((target, TargetLayers(container: container, preview: preview, content: content)))
+        rebuildDustEmitters()
+    }
+
+    /// Remove the container `attachTarget` added and release its host
+    /// lease. Idempotent — a target never attached (or already detached)
+    /// no-ops.
+    public func detachTarget(_ target: OutputTarget) {
+        guard let index = attachedExtras.firstIndex(where: { $0.target == target }) else { return }
+        let removed = attachedExtras.remove(at: index)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        removed.layers.container.removeFromSuperlayer()
+        CATransaction.commit()
+        OutputWindowManager.shared.releaseLayer(for: target)
+        rebuildDustEmitters()
     }
 
     // MARK: - MediaPlayback
@@ -516,13 +597,14 @@ public final class CameraCuePlayer: MediaPlayback {
         thenStopTask?.cancel()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for entry in targetLayers { entry.container.removeFromSuperlayer() }
+        for entry in allTargetLayers { entry.container.removeFromSuperlayer() }
         CATransaction.commit()
         let box = sessionBox
         Task.detached(priority: .userInitiated) {
             box.session.stopRunning()
         }
-        for target in targets { OutputWindowManager.shared.releaseLayer(for: target) }
+        for target in allTargets { OutputWindowManager.shared.releaseLayer(for: target) }
+        attachedExtras.removeAll()
         if !finishedFired {
             finishedFired = true
             onFinished?(.stopped)

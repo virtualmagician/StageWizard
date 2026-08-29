@@ -8,6 +8,7 @@ final class ShortcutTests: XCTestCase {
     private var actions: [ShortcutAction] = []
     private var hotkeys: [UUID] = []
     private var panics = 0
+    private var exitShowModes = 0
 
     private let cueID = UUID()
 
@@ -16,6 +17,7 @@ final class ShortcutTests: XCTestCase {
         actions = []
         hotkeys = []
         panics = 0
+        exitShowModes = 0
         manager.passthroughOverride = { _ in false }   // simulate: key window, no text focus
         manager.bindingsProvider = {
             [.go: KeyBinding(keyCode: 49), .stopAll: KeyBinding(keyCode: 46, modifiers: NSEvent.ModifierFlags.command.rawValue)]
@@ -24,6 +26,7 @@ final class ShortcutTests: XCTestCase {
         manager.onAction = { self.actions.append($0) }
         manager.onCueHotkey = { self.hotkeys.append($0) }
         manager.onPanic = { self.panics += 1 }
+        manager.onExitShowMode = { self.exitShowModes += 1 }
     }
 
     private func keyEvent(_ keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [], isRepeat: Bool = false) -> NSEvent {
@@ -51,6 +54,31 @@ final class ShortcutTests: XCTestCase {
         XCTAssertNil(result)
         XCTAssertEqual(panics, 1)
         XCTAssertTrue(actions.isEmpty)
+    }
+
+    // MARK: - D17: ⌘Esc hardwired exit-Show-mode (never reassignable, never a ShortcutAction)
+
+    func testCommandEscFiresExitShowModeNotPanic() {
+        let result = manager.handle(keyEvent(53, modifiers: .command))
+        XCTAssertNil(result, "⌘Esc must be consumed")
+        XCTAssertEqual(exitShowModes, 1)
+        XCTAssertEqual(panics, 0, "⌘Esc must not also panic")
+        XCTAssertTrue(actions.isEmpty)
+    }
+
+    func testPlainEscStillPanicsAndNeverExitsShowMode() {
+        let result = manager.handle(keyEvent(53))
+        XCTAssertNil(result)
+        XCTAssertEqual(panics, 1)
+        XCTAssertEqual(exitShowModes, 0, "plain Esc must not exit Show mode")
+    }
+
+    func testCommandEscPassesThroughWhileTextEditing() {
+        manager.passthroughOverride = { _ in true }   // simulate: text field focused
+        let result = manager.handle(keyEvent(53, modifiers: .command))
+        XCTAssertNotNil(result, "⌘Esc while typing must pass through, matching panic's own gating")
+        XCTAssertEqual(exitShowModes, 0)
+        XCTAssertEqual(panics, 0)
     }
 
     func testRepeatIsConsumedButDoesNotRefire() {
