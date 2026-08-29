@@ -19,7 +19,7 @@
           "y" : 0
         },
         "layer" : 8,
-        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "outputGroupID" : "E2FE6E42-CC36-48FD-A7C1-23CCE43CB8A3",
         "plainPreview" : "v1.6 FEATURE TOUR",
         "rtf" : "e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJ7XGZvbnR0Ymx7XGYwXGZzd2lzc1xmY2hhcnNldDAgSGVsdmV0aWNhLUJvbGQ7fX17XGNvbG9ydGJsO1xyZWQyNTVcZ3JlZW4yNTVcYmx1ZTI1NTt9XGYwXGZzMjAwXGNmMVxxYyB2MS42IEZFQVRVUkUgVE9VUn0=",
         "type" : "text"
@@ -28,9 +28,9 @@
         "mode" : "autoContinue",
         "postWait" : 1.5
       },
-      "id" : "B7C7C3AE-ED95-42D8-B68A-9172AA42EA4D",
+      "id" : "0146F2F5-4263-472B-A3F2-188BA1A8D8A8",
       "name" : "Title: v1.6 Feature Tour",
-      "notes" : "Welcome! Every edit here is undoable (⌘Z \/ ⇧⌘Z). Preflight checks the rig automatically when you enter Show mode, and a show timer starts counting in the sidebar. GO when ready.",
+      "notes" : "Welcome! Every edit here is undoable (⌘Z \/ ⇧⌘Z). This tour runs in Rehearsal mode — everything plays into the floating preview windows, no rig needed. If you switch to Show mode, Preflight will (correctly) flag that the 'Main' output has no real display: assign one in Settings → Video Outputs first. The show timer starts counting in the sidebar when Show mode begins. GO when ready.",
       "number" : "1",
       "preWait" : 0
     },
@@ -43,7 +43,7 @@
         "infiniteLoop" : false,
         "markers" : [
           {
-            "id" : "DA771ED1-6035-40A6-A0B2-330552BB4291",
+            "id" : "279485EB-64CF-4FFC-B47A-96C227B1F944",
             "name" : "Drop",
             "time" : 4
           }
@@ -59,10 +59,10 @@
         "volumeDB" : -14
       },
       "follow" : {
-        "markerID" : "DA771ED1-6035-40A6-A0B2-330552BB4291",
+        "markerID" : "279485EB-64CF-4FFC-B47A-96C227B1F944",
         "mode" : "autoContinueAtMarker"
       },
-      "id" : "8A8D0629-62DF-4A3C-B47E-B23487D66014",
+      "id" : "0B1B7707-0D3D-442A-89D7-50FF7B105AD7",
       "name" : "Tone at 2× rate → marker follow",
       "notes" : "Playback rate: 8 s of media plays in 4 s of wall-clock (tape-style varispeed, one octave up). The next cue fires at the 'Drop' marker — mid-audio, not at the end.",
       "number" : "2",
@@ -91,7 +91,7 @@
           "absolutePath" : "TestMedia\/ident-5s.mov",
           "relativePath" : "TestMedia\/ident-5s.mov"
         },
-        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "outputGroupID" : "E2FE6E42-CC36-48FD-A7C1-23CCE43CB8A3",
         "playCount" : 1,
         "rate" : 0.5,
         "startTime" : 0,
@@ -101,7 +101,7 @@
       "follow" : {
         "mode" : "autoFollow"
       },
-      "id" : "8BA790B4-4019-40A3-8E11-E08D44DCC911",
+      "id" : "D52B2F0F-7106-44AA-A05E-29D488BCD550",
       "name" : "Ident video at 0.5× (slow motion)",
       "notes" : "This started at the marker, while cue 2 was still sounding. The video runs at half speed — 5 s of media over 10 s. Open the trim editor on cue 2 to see the marker lane.",
       "number" : "3",
@@ -136,13 +136,13 @@
           "y" : 0
         },
         "layer" : 5,
-        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "outputGroupID" : "E2FE6E42-CC36-48FD-A7C1-23CCE43CB8A3",
         "type" : "camera"
       },
       "follow" : {
         "mode" : "none"
       },
-      "id" : "CA4F8B5F-C2BC-4BDA-8447-30C22F3881F5",
+      "id" : "D8F774E8-22EF-4F00-BB55-4895220A1B9E",
       "name" : "Camera: chroma key + open-palm GO",
       "notes" : "Live chroma key (green, tolerance 0.35) — stand in front of green cloth and the background drops out. Gesture GO is on: hold an open palm to the camera for 1 second and GO fires, advancing this list with no keyboard.",
       "number" : "4",
@@ -167,7 +167,7 @@
           "y" : 0
         },
         "layer" : 8,
-        "outputGroupID" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "outputGroupID" : "E2FE6E42-CC36-48FD-A7C1-23CCE43CB8A3",
         "plainPreview" : "REMOTE CONTROL",
         "rtf" : "e1xydGYxXGFuc2lcYW5zaWNwZzEyNTJ7XGZvbnR0Ymx7XGYwXGZzd2lzc1xmY2hhcnNldDAgSGVsdmV0aWNhLUJvbGQ7fX17XGNvbG9ydGJsO1xyZWQyNTVcZ3JlZW4yNTVcYmx1ZTI1NTt9XGYwXGZzMTQ0XGNmMVxxYyBSRU1PVEUgQ09OVFJPTFxwYXJcZnM2NCBNSURJICBcJ2I3ICBPU0MgIFwnYjcgIFBIT05FICBcJ2I3ICBTVEFHRSBESVNQTEFZfQ==",
         "type" : "text"
@@ -175,7 +175,7 @@
       "follow" : {
         "mode" : "none"
       },
-      "id" : "AC65D6BD-21DE-4998-8D40-BC0D89F898C5",
+      "id" : "72B779EA-6B75-47FC-BB12-A226EADB95D0",
       "name" : "Title: remote control",
       "notes" : "Settings → Remote tab: MIDI-Learn any note or pedal, OSC on UDP 53100 (\/stagewizard\/go …), and the web remote on 53200 — scan the QR with your phone for a giant GO button. Settings → Video Outputs sets up the performer-facing stage display. All off by default.",
       "number" : "5",
@@ -204,7 +204,7 @@
       "follow" : {
         "mode" : "none"
       },
-      "id" : "A237B7D5-B81A-49FA-AC37-6A8C8BC265A7",
+      "id" : "47B0DCD5-6472-43A3-91D4-3B546A6E6A46",
       "name" : "Preshow music — fires itself at 20:00:00",
       "notes" : "Wall-clock trigger: while the workspace is in Show or Rehearsal mode, this cue fires by itself at 20:00:00 (once per day). Change the time in the inspector's Shortcut tab — note the clock badge in the row.",
       "number" : "6",
@@ -221,7 +221,7 @@
       "follow" : {
         "mode" : "none"
       },
-      "id" : "F6E990FE-CE86-4AFD-99A4-D7BE6609ED25",
+      "id" : "8E43C92A-7F3B-41E7-8889-0EFA468AA9D9",
       "name" : "Stop everything (2 s fade)",
       "notes" : "The phone remote's double-tap STOP ALL does exactly this. Esc is always panic.",
       "number" : "99",
@@ -257,7 +257,7 @@
         "displays" : [
 
         ],
-        "id" : "7D706E75-A772-4AC0-8CDA-77DD8B50C168",
+        "id" : "E2FE6E42-CC36-48FD-A7C1-23CCE43CB8A3",
         "name" : "Main",
         "virtualCamera" : false
       }

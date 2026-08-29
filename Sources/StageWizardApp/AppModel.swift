@@ -110,8 +110,9 @@ final class AppModel {
             virtualCamFeeding: virtualCamera.isFeeding,
             connectedDevices: AudioDeviceManager.shared.outputDevices
         )
-        guard issues.contains(where: { $0.severity == .error }) else { return }
-        pushWarning("Preflight: \(issues.count) issue\(issues.count == 1 ? "" : "s") — open Settings → General → Preflight for details")
+        guard let firstError = issues.first(where: { $0.severity == .error }) else { return }
+        let more = issues.count > 1 ? " (+\(issues.count - 1) more — Settings → General → Preflight)" : ""
+        pushWarning("Preflight: \(firstError.message)\(more)")
     }
 
     /// One floating preview per assigned video output — so the operator can

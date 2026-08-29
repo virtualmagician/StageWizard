@@ -63,8 +63,15 @@ struct SettingsPanelView: View {
 private struct GeneralSettingsTab: View {
     @Environment(ShowDocumentController.self) private var document
     @Environment(AppModel.self) private var app
-    @State private var preflightIssues: [PreflightIssue] = []
-    @State private var showPreflightSheet = false
+    /// Identifiable wrapper so the sheet is presented via `.sheet(item:)` —
+    /// presenting with `isPresented` + a separate issues @State let the sheet
+    /// body render with the PRE-press (empty) state and show "All clear" over
+    /// a banner that had just counted real issues.
+    private struct PreflightRun: Identifiable {
+        let id = UUID()
+        let issues: [PreflightIssue]
+    }
+    @State private var preflightRun: PreflightRun?
 
     var body: some View {
         Form {
@@ -88,8 +95,7 @@ private struct GeneralSettingsTab: View {
             }
             HStack {
                 Button("Preflight…") {
-                    preflightIssues = runPreflight()
-                    showPreflightSheet = true
+                    preflightRun = PreflightRun(issues: runPreflight())
                 }
                 Text("Check media, outputs, and permissions before the show.")
                     .font(.caption)
@@ -97,8 +103,8 @@ private struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $showPreflightSheet) {
-            PreflightResultsView(issues: preflightIssues)
+        .sheet(item: $preflightRun) { run in
+            PreflightResultsView(issues: run.issues)
         }
     }
 
