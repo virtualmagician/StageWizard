@@ -16,6 +16,9 @@ final class AppModel {
     let midiController = MIDIController()
     /// UDP OSC listener — TriggerRouter's second remote-control client.
     let oscServer = OSCServer()
+    /// Web remote HTTP server (phone GO page) — TriggerRouter's third
+    /// remote-control client.
+    let webRemoteServer = WebRemoteServer()
 
     struct OperatorWarning: Identifiable {
         let id = UUID()
@@ -155,6 +158,7 @@ final class AppModel {
             self.syncVirtualCameraFeed()
             self.syncMIDIEnabled()
             self.syncOSCEnabled()
+            self.syncWebRemoteEnabled()
         }
 
         shortcuts.bindingsProvider = { [weak self] in
@@ -188,6 +192,31 @@ final class AppModel {
             case .panic: self.triggerRouter.routePanic()
             case .fireCue(let number): self.triggerRouter.route(cueNumber: number)
             }
+        }
+
+        webRemoteServer.onCommand = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case .go: self.triggerRouter.route(.go)
+            case .stopAll: self.triggerRouter.route(.stopAll)
+            case .panic: self.triggerRouter.routePanic()
+            case .next: self.triggerRouter.route(.nextCue)
+            case .prev: self.triggerRouter.route(.previousCue)
+            }
+        }
+        webRemoteServer.statusProvider = { [weak self] in
+            guard let self else {
+                return WebRemoteStatus(standingByNumber: nil, standingByName: nil, notes: nil, runningCount: 0, showMode: false, panicking: false)
+            }
+            let cue = self.transport.standingByCue
+            return WebRemoteStatus(
+                standingByNumber: cue?.number,
+                standingByName: cue?.displayName,
+                notes: cue.flatMap { self.document.cue(withID: $0.id)?.notes },
+                runningCount: self.transport.registry.instances.count,
+                showMode: self.isShowMode,
+                panicking: self.transport.isPanicking
+            )
         }
     }
 
@@ -379,6 +408,36 @@ final class AppModel {
         oscServer.stop()
         guard document.show.settings.oscEnabled else { return }
         oscServer.start(port: document.show.settings.oscPort)
+    }
+
+    /// Start/stop the web remote HTTP server AND remember the choice in the
+    /// show file — reopening the show restores it. Active in every
+    /// workspace mode while enabled, same as MIDI/OSC/hotkeys.
+    func setWebRemoteEnabled(_ enabled: Bool) {
+        document.mutate { $0.settings.webRemoteEnabled = enabled }
+        applyWebRemoteSettings()
+    }
+
+    /// Persist a new port and rebind the server to it (if currently
+    /// enabled) — the Remote settings tab calls this when the port field is
+    /// committed. A port change is a full restart; there is no live rebind.
+    func setWebRemotePort(_ port: UInt16) {
+        document.mutate { $0.settings.webRemotePort = port }
+        applyWebRemoteSettings()
+    }
+
+    /// Reconcile the running server with what the current show wants —
+    /// called on document replace (new/open).
+    func syncWebRemoteEnabled() {
+        applyWebRemoteSettings()
+    }
+
+    /// Always stop first: the only way to rebind to a new port, and a clean
+    /// no-op when the server isn't running.
+    private func applyWebRemoteSettings() {
+        webRemoteServer.stop()
+        guard document.show.settings.webRemoteEnabled else { return }
+        webRemoteServer.start(port: document.show.settings.webRemotePort)
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

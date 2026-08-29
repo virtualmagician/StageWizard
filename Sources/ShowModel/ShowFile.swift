@@ -34,6 +34,12 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     public var oscEnabled: Bool
     /// UDP port the OSC listener binds to.
     public var oscPort: UInt16
+    /// Whether the web remote (phone-friendly GO page) HTTP server should
+    /// run for this show. Active in every workspace mode while true (same
+    /// as MIDI/OSC/hotkeys).
+    public var webRemoteEnabled: Bool
+    /// TCP port the web remote HTTP server binds to.
+    public var webRemotePort: UInt16
 
     public init(
         panicDuration: TimeInterval = 3,
@@ -46,7 +52,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         midiEnabled: Bool = false,
         midiBindings: [MIDIBindingEntry] = [],
         oscEnabled: Bool = false,
-        oscPort: UInt16 = 53100
+        oscPort: UInt16 = 53100,
+        webRemoteEnabled: Bool = false,
+        webRemotePort: UInt16 = 53200
     ) {
         self.panicDuration = panicDuration
         self.doubleGOProtection = doubleGOProtection
@@ -59,11 +67,14 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         self.midiBindings = midiBindings
         self.oscEnabled = oscEnabled
         self.oscPort = oscPort
+        self.webRemoteEnabled = webRemoteEnabled
+        self.webRemotePort = webRemotePort
     }
 
     private enum CodingKeys: String, CodingKey {
         case panicDuration, doubleGOProtection, armAheadCount, keyBindings, outputGroups, workspaceMode
         case virtualCameraFeed, midiEnabled, midiBindings, oscEnabled, oscPort
+        case webRemoteEnabled, webRemotePort
     }
 
     public init(from decoder: Decoder) throws {
@@ -86,6 +97,14 @@ public struct ShowSettings: Codable, Hashable, Sendable {
             oscPort = decodedPort
         } else {
             oscPort = 53100
+        }
+        // Pre-D8 files predate the web remote entirely.
+        webRemoteEnabled = try container.decodeIfPresent(Bool.self, forKey: .webRemoteEnabled) ?? false
+        if let decodedPort = try container.decodeIfPresent(UInt16.self, forKey: .webRemotePort),
+           (1024...65535).contains(decodedPort) {
+            webRemotePort = decodedPort
+        } else {
+            webRemotePort = 53200
         }
     }
 
