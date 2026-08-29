@@ -20,6 +20,15 @@ final class TriggerRouter {
         appModel?.perform(action)
     }
 
+    /// Panic, exactly as if Esc had fired it. Panic is hardwired to Esc (see
+    /// ShortcutManager.panicKeyCode) rather than being a ShortcutAction, so
+    /// it needs its own entry point here — this calls the SAME code path as
+    /// the keyboard handler (`AppModel.wire()`'s `shortcuts.onPanic`), never
+    /// the keyboard path itself.
+    func routePanic() {
+        appModel?.transport.panic()
+    }
+
     /// Fire the cue whose show-file `number` matches, resolving group
     /// headers the same way a per-cue hotkey would. An unknown number is a
     /// silent no-op — a remote surface has no operator-facing warning UI.

@@ -29,6 +29,11 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     public var midiEnabled: Bool
     /// MIDI-Learn assignments: a MIDI trigger mapped to a transport action.
     public var midiBindings: [MIDIBindingEntry]
+    /// Whether the OSC UDP listener should run for this show. Active in
+    /// every workspace mode while true (same as MIDI/hotkeys).
+    public var oscEnabled: Bool
+    /// UDP port the OSC listener binds to.
+    public var oscPort: UInt16
 
     public init(
         panicDuration: TimeInterval = 3,
@@ -39,7 +44,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         workspaceMode: WorkspaceMode = .edit,
         virtualCameraFeed: Bool = false,
         midiEnabled: Bool = false,
-        midiBindings: [MIDIBindingEntry] = []
+        midiBindings: [MIDIBindingEntry] = [],
+        oscEnabled: Bool = false,
+        oscPort: UInt16 = 53100
     ) {
         self.panicDuration = panicDuration
         self.doubleGOProtection = doubleGOProtection
@@ -50,11 +57,13 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         self.virtualCameraFeed = virtualCameraFeed
         self.midiEnabled = midiEnabled
         self.midiBindings = midiBindings
+        self.oscEnabled = oscEnabled
+        self.oscPort = oscPort
     }
 
     private enum CodingKeys: String, CodingKey {
         case panicDuration, doubleGOProtection, armAheadCount, keyBindings, outputGroups, workspaceMode
-        case virtualCameraFeed, midiEnabled, midiBindings
+        case virtualCameraFeed, midiEnabled, midiBindings, oscEnabled, oscPort
     }
 
     public init(from decoder: Decoder) throws {
@@ -70,6 +79,14 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         // Pre-D6 files predate MIDI remote control entirely.
         midiEnabled = try container.decodeIfPresent(Bool.self, forKey: .midiEnabled) ?? false
         midiBindings = try container.decodeIfPresent([MIDIBindingEntry].self, forKey: .midiBindings) ?? []
+        // Pre-D7 files predate OSC remote control entirely.
+        oscEnabled = try container.decodeIfPresent(Bool.self, forKey: .oscEnabled) ?? false
+        if let decodedPort = try container.decodeIfPresent(UInt16.self, forKey: .oscPort),
+           (1024...65535).contains(decodedPort) {
+            oscPort = decodedPort
+        } else {
+            oscPort = 53100
+        }
     }
 
     public func group(withID id: UUID) -> OutputGroup? {

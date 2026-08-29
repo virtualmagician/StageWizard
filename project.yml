@@ -60,6 +60,7 @@ targets:
         CFBundleIconFile: AppIcon
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
         NSAppleEventsUsageDescription: StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.
+        NSLocalNetworkUsageDescription: StageWizard listens for OSC and web-remote commands from other devices on your local network.
         CFBundleShortVersionString: "1.5.2"
         CFBundleVersion: "9"
         LSApplicationCategoryType: public.app-category.entertainment

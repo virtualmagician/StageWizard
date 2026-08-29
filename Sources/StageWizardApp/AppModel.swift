@@ -14,6 +14,8 @@ final class AppModel {
     let triggerRouter = TriggerRouter()
     /// CoreMIDI listener — MIDI is TriggerRouter's first client.
     let midiController = MIDIController()
+    /// UDP OSC listener — TriggerRouter's second remote-control client.
+    let oscServer = OSCServer()
 
     struct OperatorWarning: Identifiable {
         let id = UUID()
@@ -152,6 +154,7 @@ final class AppModel {
             self.setMode(self.document.show.settings.workspaceMode, persist: false)
             self.syncVirtualCameraFeed()
             self.syncMIDIEnabled()
+            self.syncOSCEnabled()
         }
 
         shortcuts.bindingsProvider = { [weak self] in
@@ -176,6 +179,15 @@ final class AppModel {
         }
         midiController.onAction = { [weak self] action in
             self?.triggerRouter.route(action)
+        }
+
+        oscServer.onCommand = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case .action(let action): self.triggerRouter.route(action)
+            case .panic: self.triggerRouter.routePanic()
+            case .fireCue(let number): self.triggerRouter.route(cueNumber: number)
+            }
         }
     }
 
@@ -337,6 +349,36 @@ final class AppModel {
         } else {
             midiController.stop()
         }
+    }
+
+    /// Start/stop the OSC UDP listener AND remember the choice in the show
+    /// file — reopening the show restores it. Active in every workspace mode
+    /// while enabled, same as MIDI/hotkeys.
+    func setOSCEnabled(_ enabled: Bool) {
+        document.mutate { $0.settings.oscEnabled = enabled }
+        applyOSCSettings()
+    }
+
+    /// Persist a new port and rebind the listener to it (if currently
+    /// enabled) — the Remote settings tab calls this when the port field is
+    /// committed. A port change is a full restart; there is no live rebind.
+    func setOSCPort(_ port: UInt16) {
+        document.mutate { $0.settings.oscPort = port }
+        applyOSCSettings()
+    }
+
+    /// Reconcile the running listener with what the current show wants —
+    /// called on document replace (new/open).
+    func syncOSCEnabled() {
+        applyOSCSettings()
+    }
+
+    /// Always stop first: the only way to rebind to a new port, and a clean
+    /// no-op when the listener isn't running.
+    private func applyOSCSettings() {
+        oscServer.stop()
+        guard document.show.settings.oscEnabled else { return }
+        oscServer.start(port: document.show.settings.oscPort)
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

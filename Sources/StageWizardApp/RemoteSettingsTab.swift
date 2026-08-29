@@ -21,6 +21,7 @@ struct RemoteSettingsTab: View {
     @Environment(ShowDocumentController.self) private var document
     @Environment(AppModel.self) private var app
     @State private var learningAction: ShortcutAction?
+    @State private var portText: String = ""
 
     var body: some View {
         Form {
@@ -46,19 +47,66 @@ struct RemoteSettingsTab: View {
                     bindingRow(for: action)
                 }
             }
+
+            Section("OSC") {
+                Toggle("Enable OSC Control", isOn: Binding(
+                    get: { document.show.settings.oscEnabled },
+                    set: { app.setOSCEnabled($0) }
+                ))
+
+                HStack {
+                    Text("Port")
+                    TextField("Port", text: $portText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                        .onSubmit { commitPort() }
+                    Spacer()
+                    Text(oscStatusText)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Addresses: /stagewizard/go, /stopall, /next, /prev, /toggle, /panic, /cue/{number}/fire")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Unauthenticated — enable only on a trusted show network.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .safeAreaInset(edge: .bottom) {
-            Text("MIDI triggers are active in every mode while enabled.")
+            Text("MIDI and OSC triggers are active in every mode while enabled.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
         }
+        .onAppear {
+            portText = String(document.show.settings.oscPort)
+        }
         .onDisappear {
             if learningAction != nil { cancelLearning() }
         }
+    }
+
+    private var oscStatusText: String {
+        guard document.show.settings.oscEnabled else { return "Off" }
+        if let error = app.oscServer.lastError { return "Error: \(error)" }
+        return app.oscServer.isRunning
+            ? "Running on port \(document.show.settings.oscPort)"
+            : "Starting…"
+    }
+
+    private func commitPort() {
+        guard let value = Int(portText) else {
+            portText = String(document.show.settings.oscPort)
+            return
+        }
+        let clamped = UInt16(min(max(value, 1024), 65535))
+        portText = String(clamped)
+        app.setOSCPort(clamped)
     }
 
     private func bindingRow(for action: ShortcutAction) -> some View {

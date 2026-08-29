@@ -49,6 +49,8 @@
 	<string>StageWizard shows live camera input on stage displays through Camera cues.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 MagicLab AG</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>StageWizard listens for OSC and web-remote commands from other devices on your local network.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>
