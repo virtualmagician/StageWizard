@@ -21,3 +21,4 @@ Media/
 
 # Vendored GitHub CLI
 Tools/gh-cli/
+*.profraw
