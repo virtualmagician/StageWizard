@@ -44,12 +44,41 @@ final class StageDisplayController {
     /// The stage display must never be able to cover real show content.
     static let windowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
 
-    /// Stable identity for the program pane's mirrored output target — a
-    /// `.preview` target like `VirtualCameraManager.monitorTarget`, but
-    /// hosted directly in this window instead of a separate floating one
-    /// (see `OutputWindowManager.registerExternalHost`).
-    static let programTargetID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
-    static let programTarget = OutputTarget.preview(id: programTargetID, title: "Stage Display")
+    /// D16: XOR sentinel for deriving each output group's program-target id
+    /// — the exact 16-byte constant (0x33 repeated) the single-pane D13
+    /// `programTargetID` used verbatim, so the derivation is a strict
+    /// generalization of it rather than an unrelated scheme.
+    private static let programTargetSentinel: [UInt8] = Array(repeating: 0x33, count: 16)
+
+    /// Pure, deterministic per-group derivation of the mirrored output
+    /// target's id: XOR the group UUID's 16 bytes with the sentinel above.
+    /// Same group id always derives the same target id (stable across
+    /// syncs); XOR-ing with a fixed key is a bijection, so distinct groups
+    /// always derive distinct target ids, and — since the sentinel is
+    /// non-zero — the derived id can never equal the group id itself.
+    static func programTargetID(for groupID: UUID) -> UUID {
+        let groupBytes = withUnsafeBytes(of: groupID.uuid) { Array($0) }
+        var resultBytes = [UInt8](repeating: 0, count: 16)
+        for i in 0..<16 {
+            resultBytes[i] = groupBytes[i] ^ programTargetSentinel[i]
+        }
+        let tuple = (
+            resultBytes[0], resultBytes[1], resultBytes[2], resultBytes[3],
+            resultBytes[4], resultBytes[5], resultBytes[6], resultBytes[7],
+            resultBytes[8], resultBytes[9], resultBytes[10], resultBytes[11],
+            resultBytes[12], resultBytes[13], resultBytes[14], resultBytes[15]
+        )
+        return UUID(uuid: tuple)
+    }
+
+    /// Stable identity for one group's program pane's mirrored output
+    /// target — a `.preview` target like `VirtualCameraManager.monitorTarget`,
+    /// but hosted directly in this window instead of a separate floating one
+    /// (see `OutputWindowManager.registerExternalHost`). D16: one per
+    /// mirrored group, replacing D13's single fixed `programTarget`.
+    static func programTarget(for groupID: UUID) -> OutputTarget {
+        .preview(id: programTargetID(for: groupID), title: "Stage Display")
+    }
 
     /// Set by AppModel right after both are constructed (avoids a
     /// self-before-fully-initialized ordering problem in AppModel.init).
@@ -68,29 +97,32 @@ final class StageDisplayController {
 
     private var window: NSWindow?
     private var currentPresentation: Presentation?
-    /// The program pane's live content layer, registered with
-    /// `OutputWindowManager` while non-nil. A sibling of the SwiftUI
+    /// D16: one live content layer PER MIRRORED GROUP, keyed by group id —
+    /// generalizes D13's single `programHostLayer`. Each is registered with
+    /// `OutputWindowManager` while present, a sibling of the SwiftUI
     /// content's layer, inserted directly BELOW the panic-overlay layer so
     /// PANIC always covers live program content too.
-    private var programHostLayer: CALayer?
+    private var programHostLayers: [UUID: CALayer] = [:]
     /// The always-present (usually invisible) panic-overlay layer, captured
-    /// at window-creation time so the program layer can be inserted below it.
+    /// at window-creation time so program layers can be inserted below it.
     private weak var panicLayer: CALayer?
     /// D14: the floating window resizes freely (the fullscreen one never
-    /// does), so the manually-positioned `programHostLayer` needs to be told
+    /// does), so the manually-positioned program host layers need to be told
     /// to re-lay-out on every resize — this observes exactly that. Nil
     /// whenever the floating presentation isn't the current one.
     private var resizeObserver: NSObjectProtocol?
     /// The settings passed to the most recent `sync` call — kept only so the
-    /// resize observer can recompute the program pane's frame without
+    /// resize observer can recompute each program pane's frame without
     /// threading settings through the notification closure.
     private var lastSettings: StageDisplaySettings?
 
-    /// True while the program pane is actively registered as an external
-    /// host — i.e. the window is open AND the program pane is enabled.
-    /// `EngineBridge`'s `stageDisplayProgramGroupID` closure reads this (via
-    /// AppModel) to decide whether a cue's group should ALSO mirror here.
-    var isProgramPaneShowing: Bool { programHostLayer != nil }
+    /// Every output group currently mirrored by an actively-registered
+    /// program pane — i.e. the window is open AND that group's pane is
+    /// enabled AND the group still exists. `EngineBridge`'s
+    /// `stageDisplayProgramGroupIDs` closure reads this (via AppModel) to
+    /// decide whether a cue's group should ALSO mirror here. D16 replaces
+    /// D13's single `isProgramPaneShowing` Bool.
+    var mirroredProgramGroupIDs: Set<UUID> { Set(programHostLayers.keys) }
 
     /// Pure decision: should the stage display window be open right now?
     /// Factored out of `sync` so it's directly testable without creating
@@ -113,8 +145,10 @@ final class StageDisplayController {
     /// (AppModel's `syncStageDisplay`) and pass it straight through. `mode`
     /// additionally picks WHICH presentation to show while active: Show is
     /// borderless-fullscreen on the matched display, Rehearsal is a floating
-    /// resizable panel (D14).
-    func sync(settings: StageDisplaySettings, active: Bool, mode: WorkspaceMode) {
+    /// resizable panel (D14). `outputGroups` (D16) is the show's current
+    /// output-group list — needed to tell a live group's program pane apart
+    /// from a deleted one (see `syncProgramPanes`).
+    func sync(settings: StageDisplaySettings, outputGroups: [OutputGroup], active: Bool, mode: WorkspaceMode) {
         lastSettings = settings
         guard active else {
             close()
@@ -127,9 +161,9 @@ final class StageDisplayController {
                 close()
                 return
             }
-            presentFullscreen(on: matched, settings: settings)
+            presentFullscreen(on: matched, settings: settings, outputGroups: outputGroups)
         case .rehearsal:
-            presentFloating(settings: settings)
+            presentFloating(settings: settings, outputGroups: outputGroups)
         case .edit:
             // Unreachable — `isActive` is false in edit mode — but never
             // leave a stale window open if this is ever called anyway.
@@ -137,12 +171,12 @@ final class StageDisplayController {
         }
     }
 
-    private func presentFullscreen(on matched: ConnectedDisplay, settings: StageDisplaySettings) {
+    private func presentFullscreen(on matched: ConnectedDisplay, settings: StageDisplaySettings, outputGroups: [OutputGroup]) {
         if let window, currentPresentation == .fullscreen(matched.displayID) {
             // Same display: re-assert the frame so a mode/resolution change
             // (reconfiguration storm) doesn't leave it mis-sized.
             window.setFrame(matched.screen.frame, display: true)
-            syncProgramPane(settings: settings, in: window)
+            syncProgramPanes(settings: settings, outputGroups: outputGroups, in: window)
             return
         }
         close()
@@ -150,12 +184,12 @@ final class StageDisplayController {
         window = newWindow
         panicLayer = panic
         currentPresentation = .fullscreen(matched.displayID)
-        syncProgramPane(settings: settings, in: newWindow)
+        syncProgramPanes(settings: settings, outputGroups: outputGroups, in: newWindow)
     }
 
-    private func presentFloating(settings: StageDisplaySettings) {
+    private func presentFloating(settings: StageDisplaySettings, outputGroups: [OutputGroup]) {
         if let window, currentPresentation == .floating {
-            syncProgramPane(settings: settings, in: window)
+            syncProgramPanes(settings: settings, outputGroups: outputGroups, in: window)
             return
         }
         close()
@@ -164,12 +198,12 @@ final class StageDisplayController {
         panicLayer = panic
         currentPresentation = .floating
         observeResize(of: newWindow)
-        syncProgramPane(settings: settings, in: newWindow)
+        syncProgramPanes(settings: settings, outputGroups: outputGroups, in: newWindow)
     }
 
     private func close() {
         guard let window else { return }
-        teardownProgramPane()
+        teardownAllProgramPanes()
         stopObservingResize()
         window.orderOut(nil)
         window.close()
@@ -191,7 +225,7 @@ final class StageDisplayController {
             forName: NSWindow.didResizeNotification, object: window, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.repositionProgramPane()
+                self?.repositionProgramPanes()
             }
         }
     }
@@ -203,55 +237,89 @@ final class StageDisplayController {
         }
     }
 
-    private func repositionProgramPane() {
-        guard let programHostLayer, let window, let container = window.contentView,
-              let settings = lastSettings else { return }
-        let frame = StageDisplayGeometry.appKitFrame(for: settings.pane(.program).rect, in: container.bounds.size)
+    /// D16: reposition every currently-registered program layer — never
+    /// creates or retires one (that only happens in `syncProgramPanes`,
+    /// which needs `outputGroups` this resize path doesn't have handy; an
+    /// existing layer's group can't have been deleted mid-resize without a
+    /// settings change, which already re-enters `sync` on its own).
+    private func repositionProgramPanes() {
+        guard let window, let container = window.contentView, let settings = lastSettings else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        programHostLayer.frame = frame
+        for pane in settings.programPanes where pane.enabled {
+            guard let groupID = pane.programGroupID, let layer = programHostLayers[groupID] else { continue }
+            layer.frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+        }
         CATransaction.commit()
     }
 
-    /// Register/reposition/retire the program pane's live content layer to
-    /// match `settings.pane(.program)`. Safe to call every time settings
+    /// Register/reposition/retire each mirrored group's live content layer
+    /// to match `settings.programPanes`. Safe to call every time settings
     /// change while the window is open — that's how live drag-edits from
-    /// the layout editor reach it (`AppModel.updateStageDisplay` always
-    /// calls back through `sync`).
-    private func syncProgramPane(settings: StageDisplaySettings, in window: NSWindow) {
-        let pane = settings.pane(.program)
-        guard pane.enabled, let container = window.contentView, let containerLayer = container.layer else {
-            teardownProgramPane()
+    /// the layout editor, and toggling a group's mirror checkbox, reach it
+    /// (`AppModel.updateStageDisplay` always calls back through `sync`). A
+    /// pane whose group no longer exists in `outputGroups` (deleted) is left
+    /// registering nothing — the SwiftUI content view alone renders its
+    /// "PROGRAM · (deleted)" placeholder; see `StageDisplayContentView`.
+    private func syncProgramPanes(settings: StageDisplaySettings, outputGroups: [OutputGroup], in window: NSWindow) {
+        guard let container = window.contentView, let containerLayer = container.layer else {
+            teardownAllProgramPanes()
             return
         }
-        let frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
-        if let programHostLayer {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            programHostLayer.frame = frame
-            CATransaction.commit()
-            return
+
+        var liveByGroup: [UUID: StageDisplayPane] = [:]
+        for pane in settings.programPanes where pane.enabled {
+            guard let groupID = pane.programGroupID else { continue }
+            liveByGroup[groupID] = pane
         }
-        let layer = CALayer()
-        layer.frame = frame
-        // Transparent by design — the SwiftUI pane behind it paints the
-        // black background + dim "PROGRAM" placeholder; this layer only
-        // ever gains content when a player mirrors onto it, so idle stays
-        // see-through to that placeholder.
-        if let panicLayer {
-            containerLayer.insertSublayer(layer, below: panicLayer)
-        } else {
-            containerLayer.addSublayer(layer)
+
+        let staleGroupIDs = programHostLayers.keys.filter { liveByGroup[$0] == nil }
+        for groupID in staleGroupIDs {
+            teardownProgramPane(for: groupID)
         }
-        programHostLayer = layer
-        OutputWindowManager.shared.registerExternalHost(layer, for: Self.programTarget)
+
+        let liveGroupIDs = Set(outputGroups.map(\.id))
+        for (groupID, pane) in liveByGroup {
+            let frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+            if let layer = programHostLayers[groupID] {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                layer.frame = frame
+                CATransaction.commit()
+                continue
+            }
+            // A deleted group's pane persists (so the operator can see it
+            // and remove/reassign it) but mirrors nothing — no layer, no
+            // registration.
+            guard liveGroupIDs.contains(groupID) else { continue }
+
+            let layer = CALayer()
+            layer.frame = frame
+            // Transparent by design — the SwiftUI pane behind it paints the
+            // black background + dim "PROGRAM · <group>" placeholder; this
+            // layer only ever gains content when a player mirrors onto it,
+            // so idle stays see-through to that placeholder.
+            if let panicLayer {
+                containerLayer.insertSublayer(layer, below: panicLayer)
+            } else {
+                containerLayer.addSublayer(layer)
+            }
+            programHostLayers[groupID] = layer
+            OutputWindowManager.shared.registerExternalHost(layer, for: Self.programTarget(for: groupID))
+        }
     }
 
-    private func teardownProgramPane() {
-        guard let programHostLayer else { return }
-        OutputWindowManager.shared.unregisterExternalHost(for: Self.programTarget)
-        programHostLayer.removeFromSuperlayer()
-        self.programHostLayer = nil
+    private func teardownProgramPane(for groupID: UUID) {
+        guard let layer = programHostLayers[groupID] else { return }
+        OutputWindowManager.shared.unregisterExternalHost(for: Self.programTarget(for: groupID))
+        layer.removeFromSuperlayer()
+        programHostLayers[groupID] = nil
+    }
+
+    private func teardownAllProgramPanes() {
+        for groupID in Array(programHostLayers.keys) {
+            teardownProgramPane(for: groupID)
+        }
     }
 
     /// Builds a PLAIN (non-flipped, standard AppKit y-up) container view
@@ -395,25 +463,43 @@ struct StageDisplayContentView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 Color.black
-                ForEach(StageDisplayPaneKind.allCases, id: \.self) { kind in
+                // Non-program kinds: exactly one pane each, unchanged from D13.
+                ForEach(StageDisplayPaneKind.allCases.filter { $0 != .program }, id: \.self) { kind in
                     let pane = settings.pane(kind)
                     if pane.enabled {
-                        let size = CGSize(
-                            width: geo.size.width * pane.rect.width,
-                            height: geo.size.height * pane.rect.height
-                        )
-                        paneView(kind, size: size)
-                            .frame(width: size.width, height: size.height)
-                            .position(
-                                x: geo.size.width * (pane.rect.x + pane.rect.width / 2),
-                                y: geo.size.height * (pane.rect.y + pane.rect.height / 2)
-                            )
+                        positioned(pane, in: geo) { size in paneView(kind, size: size) }
+                    }
+                }
+                // D16: zero or more program panes, one per mirrored group —
+                // each drawn independently so multiple are tellable apart.
+                ForEach(settings.programPanes) { pane in
+                    if pane.enabled {
+                        positioned(pane, in: geo) { size in programPane(pane, size: size) }
                     }
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .ignoresSafeArea()
+    }
+
+    /// Shared sizing/positioning for a pane's content, factored out so both
+    /// the single-per-kind loop and the multi-program-pane loop place their
+    /// content identically.
+    @ViewBuilder
+    private func positioned<Content: View>(
+        _ pane: StageDisplayPane, in geo: GeometryProxy, @ViewBuilder content: (CGSize) -> Content
+    ) -> some View {
+        let size = CGSize(
+            width: geo.size.width * pane.rect.width,
+            height: geo.size.height * pane.rect.height
+        )
+        content(size)
+            .frame(width: size.width, height: size.height)
+            .position(
+                x: geo.size.width * (pane.rect.x + pane.rect.width / 2),
+                y: geo.size.height * (pane.rect.y + pane.rect.height / 2)
+            )
     }
 
     @ViewBuilder
@@ -424,7 +510,7 @@ struct StageDisplayContentView: View {
         case .standingBy: standingByPane(size: size)
         case .notes: notesPane(size: size)
         case .running: runningPane(size: size)
-        case .program: programPane(size: size)
+        case .program: EmptyView() // unreachable — program panes render via the dedicated ForEach above.
         case .gesture: gesturePane(size: size)
         }
     }
@@ -531,18 +617,27 @@ struct StageDisplayContentView: View {
 
     // MARK: Program — placeholder; the LIVE layer is hosted outside SwiftUI
 
-    /// Always-black with a dim "PROGRAM" watermark. The actual mirrored cue
-    /// content is a raw CALayer `StageDisplayController` positions directly
-    /// over this same screen rect (see `syncProgramPane`) — transparent
-    /// until a player attaches, so this watermark shows through whenever
-    /// nothing is currently routed here.
-    private func programPane(size: CGSize) -> some View {
-        ZStack {
+    /// Always-black with a dim "PROGRAM · <group name>" watermark — D16: the
+    /// group name distinguishes multiple simultaneous program panes at a
+    /// glance while idle. A group that's been deleted since this pane was
+    /// added reads "PROGRAM · (deleted)"; `StageDisplayController` also
+    /// registers no live layer for it (see `syncProgramPanes`), so it can
+    /// never show anything but this placeholder. The actual mirrored cue
+    /// content, when the group is live, is a raw CALayer
+    /// `StageDisplayController` positions directly over this same screen
+    /// rect — transparent until a player attaches, so this watermark shows
+    /// through whenever nothing is currently routed here.
+    private func programPane(_ pane: StageDisplayPane, size: CGSize) -> some View {
+        let groupName = pane.programGroupID.flatMap { document.show.settings.group(withID: $0)?.name } ?? "(deleted)"
+        return ZStack {
             Color.black
-            Text("PROGRAM")
+            Text("PROGRAM · \(groupName)")
                 .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
                 .tracking(2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
                 .foregroundStyle(.white.opacity(0.15))
+                .padding(.horizontal, size.width * 0.05)
         }
         .frame(width: size.width, height: size.height)
         .clipped()

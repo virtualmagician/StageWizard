@@ -17,14 +17,15 @@ final class StageDisplayTests: XCTestCase {
         let settings = StageDisplaySettings()
         XCTAssertFalse(settings.enabled)
         XCTAssertNil(settings.display)
-        XCTAssertNil(settings.programGroupID)
-        XCTAssertEqual(settings.panes.count, StageDisplayPaneKind.allCases.count)
+        // D16: no default program pane at all — one per mirrored group, and
+        // there's no meaningful "default" group to pre-select.
+        XCTAssertTrue(settings.programPanes.isEmpty, "a fresh show mirrors no groups on the stage display")
+        XCTAssertEqual(settings.panes.count, StageDisplayPaneKind.allCases.count - 1, "every non-program kind, no program panes")
         XCTAssertTrue(settings.pane(.clock).enabled)
         XCTAssertTrue(settings.pane(.showTimer).enabled)
         XCTAssertTrue(settings.pane(.standingBy).enabled)
         XCTAssertTrue(settings.pane(.notes).enabled)
         XCTAssertTrue(settings.pane(.running).enabled)
-        XCTAssertFalse(settings.pane(.program).enabled, "program view is off by default — no group chosen yet")
         XCTAssertFalse(settings.pane(.gesture).enabled, "D15 gesture pane is off by default — experimental")
     }
 
@@ -46,7 +47,7 @@ final class StageDisplayTests: XCTestCase {
 
         let decoded = try ShowFile.load(from: stripped)
         XCTAssertFalse(decoded.settings.stageDisplay.enabled, "pre-D9 files predate the stage display")
-        XCTAssertEqual(decoded.settings.stageDisplay.panes.count, StageDisplayPaneKind.allCases.count)
+        XCTAssertEqual(decoded.settings.stageDisplay.panes.count, StageDisplayPaneKind.allCases.count - 1, "every non-program kind, no program panes")
         XCTAssertTrue(decoded.settings.stageDisplay.pane(.clock).enabled)
         XCTAssertTrue(decoded.settings.stageDisplay.pane(.showTimer).enabled)
         XCTAssertTrue(decoded.settings.stageDisplay.pane(.standingBy).enabled)
@@ -117,12 +118,12 @@ final class StageDisplayTests: XCTestCase {
 
         let decoded = try ShowFile.load(from: data)
         let s = decoded.settings.stageDisplay
-        XCTAssertEqual(s.panes.count, StageDisplayPaneKind.allCases.count, "every kind present exactly once")
+        XCTAssertEqual(s.panes.count, StageDisplayPaneKind.allCases.count - 1, "every non-program kind present exactly once, no program panes")
         XCTAssertFalse(s.pane(.clock).enabled)
         XCTAssertEqual(s.pane(.clock).rect, StageRect(x: 0, y: 0, width: 0.2, height: 0.1))
         XCTAssertTrue(s.pane(.showTimer).enabled, "missing kind filled in with its default")
         XCTAssertEqual(s.pane(.showTimer).rect, StageDisplayPane.defaultRect(for: .showTimer))
-        XCTAssertFalse(s.pane(.program).enabled)
+        XCTAssertTrue(s.programPanes.isEmpty, "no program pane in the decoded array — nothing to fill in for it")
         XCTAssertFalse(s.pane(.gesture).enabled, "missing kind filled in with its (disabled) default")
         XCTAssertEqual(s.pane(.gesture).rect, StageDisplayPane.defaultRect(for: .gesture))
     }
@@ -148,11 +149,18 @@ final class StageDisplayTests: XCTestCase {
     /// present and explicitly enabled, `gesture` entirely absent (it did
     /// not exist yet) — the exact shape `fillingMissing` exists to repair.
     func testPreD15PanesArrayFillsInGestureAsDisabledAtItsDefaultRect() throws {
+        // Faithful D13/14-era shape: a bare `.program` pane (no groupID of
+        // its own yet) paired with the top-level legacy `programGroupID` —
+        // D16 migrates that onto the pane (see the dedicated migration
+        // tests below), so it survives reconciliation just like every other
+        // pre-existing kind here.
         var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
         var settings = json["settings"] as! [String: Any]
         let preD15Kinds: [StageDisplayPaneKind] = [.clock, .showTimer, .standingBy, .notes, .running, .program]
+        let legacyGroupID = UUID()
         settings["stageDisplay"] = [
             "enabled": true,
+            "programGroupID": legacyGroupID.uuidString,
             "panes": preD15Kinds.map { kind in
                 ["kind": kind.rawValue, "enabled": true, "rect": ["x": 0.0, "y": 0.0, "width": 0.2, "height": 0.1]]
             },
@@ -162,13 +170,14 @@ final class StageDisplayTests: XCTestCase {
 
         let decoded = try ShowFile.load(from: data)
         let s = decoded.settings.stageDisplay
-        XCTAssertEqual(s.panes.count, StageDisplayPaneKind.allCases.count, "gesture filled in — one entry per kind")
+        XCTAssertEqual(s.panes.count, StageDisplayPaneKind.allCases.count, "gesture filled in, program migrated onto its group — one entry per kind")
         XCTAssertFalse(s.pane(.gesture).enabled, "brand new kind — never present in the old array, so its default (off) applies")
         XCTAssertEqual(s.pane(.gesture).rect, StageDisplayPane.defaultRect(for: .gesture))
         // Every pre-existing kind keeps what the old file actually said.
         for kind in preD15Kinds {
             XCTAssertTrue(s.pane(kind).enabled, "\(kind) keeps its explicit pre-D15 value")
         }
+        XCTAssertEqual(s.programPane(forGroup: legacyGroupID)?.programGroupID, legacyGroupID)
     }
 
     func testGesturePaneRoundTripsThroughShowFileWhenEnabled() throws {
@@ -235,19 +244,219 @@ final class StageDisplayTests: XCTestCase {
     func testStageDisplayPanesRoundTripThroughShowFile() throws {
         var show = ShowFile()
         var settings = StageDisplaySettings()
-        if let idx = settings.panes.firstIndex(where: { $0.kind == .program }) {
-            settings.panes[idx].enabled = true
-            settings.panes[idx].rect = StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25)
-        }
         let groupID = UUID()
-        settings.programGroupID = groupID
+        settings.panes.append(StageDisplayPane(
+            kind: .program, enabled: true, rect: StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25), programGroupID: groupID
+        ))
         show.settings.stageDisplay = settings
 
         let decoded = try ShowFile.load(from: show.encoded())
         XCTAssertEqual(decoded.settings.stageDisplay.panes.count, StageDisplayPaneKind.allCases.count)
-        XCTAssertTrue(decoded.settings.stageDisplay.pane(.program).enabled)
-        XCTAssertEqual(decoded.settings.stageDisplay.pane(.program).rect, StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25))
-        XCTAssertEqual(decoded.settings.stageDisplay.programGroupID, groupID)
+        let pane = decoded.settings.stageDisplay.programPane(forGroup: groupID)
+        XCTAssertEqual(pane?.enabled, true)
+        XCTAssertEqual(pane?.rect, StageRect(x: 0.1, y: 0.2, width: 0.3, height: 0.25))
+        XCTAssertEqual(pane?.programGroupID, groupID)
+    }
+
+    // MARK: - D16: multiple program panes (one per mirrored output group)
+
+    func testMultipleProgramPanesRoundTripThroughShowFileWithTheirOwnGroupIDs() throws {
+        var show = ShowFile()
+        var settings = StageDisplaySettings()
+        let groupA = UUID()
+        let groupB = UUID()
+        settings.panes.append(StageDisplayPane(
+            kind: .program, enabled: true, rect: StageRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2), programGroupID: groupA
+        ))
+        settings.panes.append(StageDisplayPane(
+            kind: .program, enabled: false, rect: StageRect(x: 0.5, y: 0.5, width: 0.2, height: 0.2), programGroupID: groupB
+        ))
+        show.settings.stageDisplay = settings
+
+        let decoded = try ShowFile.load(from: show.encoded())
+        let s = decoded.settings.stageDisplay
+        XCTAssertEqual(s.programPanes.count, 2)
+        XCTAssertEqual(s.programPane(forGroup: groupA)?.enabled, true)
+        XCTAssertEqual(s.programPane(forGroup: groupA)?.rect, StageRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
+        XCTAssertEqual(s.programPane(forGroup: groupB)?.enabled, false)
+        XCTAssertEqual(s.programPane(forGroup: groupB)?.rect, StageRect(x: 0.5, y: 0.5, width: 0.2, height: 0.2))
+        // Every non-program kind is still exactly one entry, untouched.
+        for kind in StageDisplayPaneKind.allCases where kind != .program {
+            XCTAssertNotNil(s.panes.first { $0.kind == kind })
+        }
+    }
+
+    func testProgramPaneIDsAreDistinctPerGroupAndStableAcrossReencoding() throws {
+        var show = ShowFile()
+        var settings = StageDisplaySettings()
+        let groupA = UUID()
+        let groupB = UUID()
+        settings.panes.append(StageDisplayPane(kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupA))
+        settings.panes.append(StageDisplayPane(kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupB))
+        show.settings.stageDisplay = settings
+
+        let decoded = try ShowFile.load(from: show.encoded())
+        let ids = Set(decoded.settings.stageDisplay.programPanes.map(\.id))
+        XCTAssertEqual(ids.count, 2, "each program pane keeps its own distinct id")
+    }
+
+    func testD13EraFileWithTopLevelProgramGroupIDMigratesOntoTheBareProgramPane() throws {
+        // Exact D13-D15 shape: `panes` contains a bare `.program` entry with
+        // no groupID of its own, and the group it mirrors lives in the
+        // sibling top-level `programGroupID` key.
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        let legacyGroupID = UUID()
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "programGroupID": legacyGroupID.uuidString,
+            "panes": [
+                ["kind": "program", "enabled": true, "rect": ["x": 0.6, "y": 0.5, "width": 0.3, "height": 0.2]],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        let s = decoded.settings.stageDisplay
+        XCTAssertEqual(s.programPanes.count, 1, "the one D13-era program pane survives, now carrying its group")
+        let pane = s.programPane(forGroup: legacyGroupID)
+        XCTAssertNotNil(pane)
+        XCTAssertEqual(pane?.enabled, true)
+        XCTAssertEqual(pane?.rect, StageRect(x: 0.6, y: 0.5, width: 0.3, height: 0.2))
+    }
+
+    func testD13EraFileWithNilTopLevelProgramGroupIDDropsTheBareProgramPane() throws {
+        // A D13-era file where the operator enabled the program pane but
+        // never actually picked a group — `programGroupID` is present and
+        // explicitly null. Nothing to migrate onto, so the pane is dropped
+        // (it would mirror nothing either way).
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "programGroupID": NSNull(),
+            "panes": [
+                ["kind": "program", "enabled": true, "rect": ["x": 0.6, "y": 0.5, "width": 0.3, "height": 0.2]],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertTrue(decoded.settings.stageDisplay.programPanes.isEmpty, "an ungrouped program pane mirrors nothing — dropped")
+    }
+
+    func testBareProgramPaneWithNoLegacyKeyAtAllIsDropped() throws {
+        // No top-level `programGroupID` key whatsoever (not even present) —
+        // same outcome as an explicit null: nothing to graft, so it drops.
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": [
+                ["kind": "program", "enabled": true, "rect": ["x": 0.6, "y": 0.5, "width": 0.3, "height": 0.2]],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        XCTAssertTrue(decoded.settings.stageDisplay.programPanes.isEmpty)
+    }
+
+    func testNonProgramKindFillInNeverDuplicatesProgramPanes() throws {
+        // A hand-trimmed `panes` array missing several non-program kinds AND
+        // holding two genuinely-grouped program panes — filling in the
+        // missing kinds must never touch, drop, or duplicate the program
+        // panes already present.
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        let groupA = UUID()
+        let groupB = UUID()
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": [
+                ["kind": "clock", "enabled": true, "rect": ["x": 0.0, "y": 0.0, "width": 0.2, "height": 0.1]],
+                ["kind": "program", "enabled": true, "rect": ["x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2], "programGroupID": groupA.uuidString],
+                ["kind": "program", "enabled": true, "rect": ["x": 0.5, "y": 0.5, "width": 0.2, "height": 0.2], "programGroupID": groupB.uuidString],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        let s = decoded.settings.stageDisplay
+        XCTAssertEqual(s.programPanes.count, 2, "both grouped program panes survive fill-in untouched")
+        XCTAssertNotNil(s.programPane(forGroup: groupA))
+        XCTAssertNotNil(s.programPane(forGroup: groupB))
+        // Every non-program kind still fills to exactly one, including the
+        // ones missing from this hand-trimmed array.
+        let nonProgramCount = s.panes.filter { $0.kind != .program }.count
+        XCTAssertEqual(nonProgramCount, StageDisplayPaneKind.allCases.count - 1)
+    }
+
+    func testDuplicateProgramPanesForTheSameGroupDedupWithLastOneWinning() throws {
+        var json = try JSONSerialization.jsonObject(with: ShowFile().encoded()) as! [String: Any]
+        var settings = json["settings"] as! [String: Any]
+        let groupID = UUID()
+        settings["stageDisplay"] = [
+            "enabled": true,
+            "panes": [
+                ["kind": "program", "enabled": false, "rect": ["x": 0.0, "y": 0.0, "width": 0.2, "height": 0.2], "programGroupID": groupID.uuidString],
+                ["kind": "program", "enabled": true, "rect": ["x": 0.4, "y": 0.4, "width": 0.3, "height": 0.3], "programGroupID": groupID.uuidString],
+            ],
+        ]
+        json["settings"] = settings
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try ShowFile.load(from: data)
+        let s = decoded.settings.stageDisplay
+        XCTAssertEqual(s.programPanes.count, 1, "two entries for the same group collapse to one")
+        XCTAssertEqual(s.programPane(forGroup: groupID)?.enabled, true, "last one wins")
+        XCTAssertEqual(s.programPane(forGroup: groupID)?.rect, StageRect(x: 0.4, y: 0.4, width: 0.3, height: 0.3))
+    }
+
+    func testProgramPaneIDDistinguishesPanesByGroupNotJustKind() {
+        let groupA = UUID()
+        let groupB = UUID()
+        let paneA = StageDisplayPane(kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupA)
+        let paneB = StageDisplayPane(kind: .program, enabled: true, rect: StageDisplayPane.defaultRect(for: .program), programGroupID: groupB)
+        XCTAssertNotEqual(paneA.id, paneB.id)
+        XCTAssertEqual(paneA.id, "program-\(groupA.uuidString)")
+    }
+
+    func testNonProgramPaneIDIsJustTheKindRawValue() {
+        let pane = StageDisplayPane(kind: .clock, enabled: true, rect: StageDisplayPane.defaultRect(for: .clock))
+        XCTAssertEqual(pane.id, "clock")
+    }
+
+    // MARK: - StageDisplayController.programTargetID (D16 per-group derivation)
+
+    func testProgramTargetIDIsDeterministicForTheSameGroup() {
+        let groupID = UUID()
+        XCTAssertEqual(StageDisplayController.programTargetID(for: groupID), StageDisplayController.programTargetID(for: groupID))
+    }
+
+    func testProgramTargetIDDiffersAcrossDifferentGroups() {
+        let a = StageDisplayController.programTargetID(for: UUID())
+        let b = StageDisplayController.programTargetID(for: UUID())
+        XCTAssertNotEqual(a, b)
+    }
+
+    func testProgramTargetIDNeverEqualsItsOwnGroupID() {
+        for _ in 0..<20 {
+            let groupID = UUID()
+            XCTAssertNotEqual(StageDisplayController.programTargetID(for: groupID), groupID)
+        }
+    }
+
+    func testProgramTargetUsesTheDerivedIDAsAPreviewTarget() {
+        let groupID = UUID()
+        XCTAssertEqual(
+            StageDisplayController.programTarget(for: groupID),
+            .preview(id: StageDisplayController.programTargetID(for: groupID), title: "Stage Display")
+        )
     }
 
     // MARK: - StageDisplayGeometry.appKitFrame (pure y-down -> y-up conversion)
@@ -282,38 +491,38 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(frame.origin.y, 0, accuracy: 0.001)
     }
 
-    // MARK: - EnginePlayerProvider.extraTargets (D13 program-target injection)
+    // MARK: - EnginePlayerProvider.extraTargets (D13 program-target injection, D16 multi-group)
 
-    func testExtraTargetsIncludesProgramTargetWhenGroupMatchesStageDisplayProgramGroup() {
+    func testExtraTargetsIncludesProgramTargetWhenGroupIsInTheMirroredSet() {
         let group = OutputGroup(name: "Main")
         var settings = ShowSettings()
         settings.outputGroups = [group]
         let extra = EnginePlayerProvider.extraTargets(
             groupID: group.id, settings: settings,
-            virtualCameraFeeding: false, stageDisplayProgramGroupID: group.id
+            virtualCameraFeeding: false, stageDisplayProgramGroupIDs: [group.id]
         )
-        XCTAssertTrue(extra.contains(StageDisplayController.programTarget))
+        XCTAssertTrue(extra.contains(StageDisplayController.programTarget(for: group.id)))
     }
 
-    func testExtraTargetsExcludesProgramTargetForADifferentGroup() {
+    func testExtraTargetsExcludesProgramTargetForAGroupNotInTheMirroredSet() {
         let group = OutputGroup(name: "Main")
         let other = OutputGroup(name: "Other")
         var settings = ShowSettings()
         settings.outputGroups = [group, other]
         let extra = EnginePlayerProvider.extraTargets(
             groupID: group.id, settings: settings,
-            virtualCameraFeeding: false, stageDisplayProgramGroupID: other.id
+            virtualCameraFeeding: false, stageDisplayProgramGroupIDs: [other.id]
         )
-        XCTAssertFalse(extra.contains(StageDisplayController.programTarget))
+        XCTAssertFalse(extra.contains(where: { $0 == StageDisplayController.programTarget(for: group.id) }))
     }
 
-    func testExtraTargetsExcludesProgramTargetWhenStageDisplayProgramGroupIDIsNil() {
+    func testExtraTargetsExcludesProgramTargetWhenMirroredSetIsEmpty() {
         let group = OutputGroup(name: "Main")
         var settings = ShowSettings()
         settings.outputGroups = [group]
         let extra = EnginePlayerProvider.extraTargets(
             groupID: group.id, settings: settings,
-            virtualCameraFeeding: false, stageDisplayProgramGroupID: nil
+            virtualCameraFeeding: false, stageDisplayProgramGroupIDs: []
         )
         XCTAssertTrue(extra.isEmpty)
     }
@@ -321,7 +530,7 @@ final class StageDisplayTests: XCTestCase {
     func testExtraTargetsExcludesProgramTargetWhenCueHasNoGroup() {
         let extra = EnginePlayerProvider.extraTargets(
             groupID: nil, settings: ShowSettings(),
-            virtualCameraFeeding: false, stageDisplayProgramGroupID: UUID()
+            virtualCameraFeeding: false, stageDisplayProgramGroupIDs: [UUID()]
         )
         XCTAssertTrue(extra.isEmpty)
     }
@@ -332,11 +541,44 @@ final class StageDisplayTests: XCTestCase {
         settings.outputGroups = [group]
         let extra = EnginePlayerProvider.extraTargets(
             groupID: group.id, settings: settings,
-            virtualCameraFeeding: true, stageDisplayProgramGroupID: group.id
+            virtualCameraFeeding: true, stageDisplayProgramGroupIDs: [group.id]
         )
         XCTAssertTrue(extra.contains(VirtualCameraManager.monitorTarget))
-        XCTAssertTrue(extra.contains(StageDisplayController.programTarget))
+        XCTAssertTrue(extra.contains(StageDisplayController.programTarget(for: group.id)))
         XCTAssertEqual(extra.count, 2)
+    }
+
+    // D16: a cue's group can be one of SEVERAL simultaneously mirrored groups.
+
+    func testExtraTargetsGivesEachOfTwoMirroredGroupsOnlyItsOwnTarget() {
+        let groupA = OutputGroup(name: "A")
+        let groupB = OutputGroup(name: "B")
+        var settings = ShowSettings()
+        settings.outputGroups = [groupA, groupB]
+        let mirrored: Set<UUID> = [groupA.id, groupB.id]
+
+        let extraA = EnginePlayerProvider.extraTargets(
+            groupID: groupA.id, settings: settings, virtualCameraFeeding: false, stageDisplayProgramGroupIDs: mirrored
+        )
+        XCTAssertEqual(extraA, [StageDisplayController.programTarget(for: groupA.id)])
+
+        let extraB = EnginePlayerProvider.extraTargets(
+            groupID: groupB.id, settings: settings, virtualCameraFeeding: false, stageDisplayProgramGroupIDs: mirrored
+        )
+        XCTAssertEqual(extraB, [StageDisplayController.programTarget(for: groupB.id)])
+    }
+
+    func testExtraTargetsExcludesProgramTargetForAThirdUnmirroredGroupEvenWithTwoOthersMirrored() {
+        let groupA = OutputGroup(name: "A")
+        let groupB = OutputGroup(name: "B")
+        let groupC = OutputGroup(name: "C")
+        var settings = ShowSettings()
+        settings.outputGroups = [groupA, groupB, groupC]
+        let extra = EnginePlayerProvider.extraTargets(
+            groupID: groupC.id, settings: settings,
+            virtualCameraFeeding: false, stageDisplayProgramGroupIDs: [groupA.id, groupB.id]
+        )
+        XCTAssertTrue(extra.isEmpty)
     }
 
     // MARK: - EnginePlayerProvider.floatingTarget (D14 floating-window group routing)

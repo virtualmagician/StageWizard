@@ -268,13 +268,13 @@ final class AppModel {
         provider.virtualCameraFeeding = { [weak self] in
             self?.virtualCamera.isFeeding ?? false
         }
-        // D13: the stage display's PROGRAM pane mirrors one output group's
-        // live cues — nil whenever the pane isn't currently showing (window
-        // closed, or the pane disabled), same "extra target" shape as
-        // virtualCameraFeeding above.
-        provider.stageDisplayProgramGroupID = { [weak self] in
-            guard let self, self.stageDisplayController.isProgramPaneShowing else { return nil }
-            return self.document.show.settings.stageDisplay.programGroupID
+        // D13, generalized D16: the stage display's PROGRAM panes mirror any
+        // number of output groups' live cues — empty whenever the window
+        // isn't currently showing any of them (window closed, or every pane
+        // disabled/deleted), same "extra target" shape as virtualCameraFeeding
+        // above.
+        provider.stageDisplayProgramGroupIDs = { [weak self] in
+            self?.stageDisplayController.mirroredProgramGroupIDs ?? []
         }
         // D11 (experimental) gesture GO: fire GO exactly as a bound key
         // would, but never while editing — a magician rehearsing gestures
@@ -524,7 +524,9 @@ final class AppModel {
         let settings = document.show.settings.stageDisplay
         let displayConnected = settings.display.flatMap { DisplayManager.shared.match($0) } != nil
         let active = StageDisplayController.isActive(mode: mode, settings: settings, displayConnected: displayConnected)
-        stageDisplayController.sync(settings: settings, active: active, mode: mode)
+        stageDisplayController.sync(
+            settings: settings, outputGroups: document.show.settings.outputGroups, active: active, mode: mode
+        )
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

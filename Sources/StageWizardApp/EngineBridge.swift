@@ -15,11 +15,12 @@ final class EnginePlayerProvider: CuePlayerProviding {
     /// True while the virtual webcam is feeding — groups flagged
     /// `virtualCamera` then mirror onto its monitor panel too.
     var virtualCameraFeeding: @MainActor () -> Bool = { false }
-    /// D13: the output group the stage display's PROGRAM pane currently
-    /// mirrors, or nil — nil whenever the stage display isn't open, or its
-    /// program pane isn't enabled (see `StageDisplayController.isProgramPaneShowing`).
-    /// Wired by AppModel, same shape as `virtualCameraFeeding`.
-    var stageDisplayProgramGroupID: @MainActor () -> UUID? = { nil }
+    /// D13, generalized D16: every output group the stage display's PROGRAM
+    /// panes currently mirror — empty whenever the stage display isn't open,
+    /// or holds only groups whose pane is enabled and actually registered
+    /// (see `StageDisplayController.mirroredProgramGroupIDs`). Wired by
+    /// AppModel, same shape as `virtualCameraFeeding`.
+    var stageDisplayProgramGroupIDs: @MainActor () -> Set<UUID> = { [] }
     /// D11 (experimental): fires when a live camera cue's gesture hold
     /// completes. Wired by AppModel to a mode-gated GO — see `AppModel.wireEngines`.
     var onGesture: (@MainActor () -> Void)?
@@ -131,7 +132,7 @@ final class EnginePlayerProvider: CuePlayerProviding {
             groupID: groupID,
             settings: settings(),
             virtualCameraFeeding: virtualCameraFeeding(),
-            stageDisplayProgramGroupID: stageDisplayProgramGroupID()
+            stageDisplayProgramGroupIDs: stageDisplayProgramGroupIDs()
         )
         if let floating = Self.floatingTarget(groupID: groupID, settings: settings()) {
             return [floating] + extra
@@ -160,25 +161,27 @@ final class EnginePlayerProvider: CuePlayerProviding {
 
     /// Extra output targets appended to a group's REAL routing regardless of
     /// mode or display connectivity. The virtual-webcam monitor panel and
-    /// (D13) the stage display's program view are both "extra layers on top
-    /// of the real routing" — a target added alongside whatever the group
-    /// actually resolves to, so ONE decode also mirrors onto a preview
-    /// window elsewhere. Factored out of `resolveTargets` as a pure
-    /// function (no window/player/provider needed) so the append DECISION
-    /// is unit-testable on its own.
+    /// (D13, generalized D16) the stage display's program views are both
+    /// "extra layers on top of the real routing" — a target added alongside
+    /// whatever the group actually resolves to, so ONE decode also mirrors
+    /// onto a preview window elsewhere. D16: a cue's group can now match ANY
+    /// number of mirrored stage-display groups at once (one target per
+    /// match), not just a single one. Factored out of `resolveTargets` as a
+    /// pure function (no window/player/provider needed) so the append
+    /// DECISION is unit-testable on its own.
     static func extraTargets(
         groupID: UUID?,
         settings: ShowSettings,
         virtualCameraFeeding: Bool,
-        stageDisplayProgramGroupID: UUID?
+        stageDisplayProgramGroupIDs: Set<UUID>
     ) -> [OutputTarget] {
         var extra: [OutputTarget] = []
         if virtualCameraFeeding,
            let groupID, let group = settings.group(withID: groupID), group.virtualCamera {
             extra.append(VirtualCameraManager.monitorTarget)
         }
-        if let groupID, let programGroupID = stageDisplayProgramGroupID, groupID == programGroupID {
-            extra.append(StageDisplayController.programTarget)
+        if let groupID, stageDisplayProgramGroupIDs.contains(groupID) {
+            extra.append(StageDisplayController.programTarget(for: groupID))
         }
         return extra
     }

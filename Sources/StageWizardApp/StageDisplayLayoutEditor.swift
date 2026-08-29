@@ -16,6 +16,32 @@ extension StageDisplayPaneKind {
     }
 }
 
+extension StageDisplayPane {
+    /// D16: default rect for a NEWLY mirrored group's program pane — the
+    /// base program rect (`defaultRect(for: .program)`), staggered by
+    /// +0.03/+0.03 for each program pane already on the canvas so a second,
+    /// third, etc. group checked in Settings doesn't land exactly on top of
+    /// the one before it. The base program rect already sits close to the
+    /// canvas's right edge, so vertical room governs when the stagger wraps
+    /// back to the base offset (horizontal offset clamps flush against the
+    /// edge once it runs out of room, same as any manual drag would) —
+    /// `StageDisplayPane.clamped` (already applied to every rect) makes that
+    /// clamping safe regardless. Deliberately NOT part of decode/
+    /// `fillingMissing` — this only ever runs when the UI itself creates a
+    /// brand-new pane.
+    static func staggeredProgramRect(existingProgramPaneCount: Int) -> StageRect {
+        let base = defaultRect(for: .program)
+        let step = 0.03
+        let maxSteps = max(1, Int(((1 - base.y - base.height) / step).rounded(.down)) + 1)
+        let stepIndex = existingProgramPaneCount % maxSteps
+        let offset = step * Double(stepIndex)
+        var rect = base
+        rect.x = base.x + offset
+        rect.y = base.y + offset
+        return clamped(rect)
+    }
+}
+
 /// "Edit Layout…" sheet for the stage display (D13): a fixed 16:9 canvas
 /// standing in for the display, with each ENABLED pane drawn as a labeled,
 /// draggable, corner-resizable box — the same drag-to-move/corner-handles
@@ -50,8 +76,8 @@ struct StageDisplayLayoutEditor: View {
             Divider()
 
             HStack(alignment: .top, spacing: 16) {
-                LayoutCanvas(panes: settings.panes) { kind, rect in
-                    updatePane(kind) { $0.rect = rect }
+                LayoutCanvas(panes: settings.panes, label: label(for:)) { paneID, rect in
+                    updatePane(paneID) { $0.rect = rect }
                 }
                 .frame(width: 640, height: 360)
                 .background(Theme.insetBackground, in: RoundedRectangle(cornerRadius: 6))
@@ -71,11 +97,24 @@ struct StageDisplayLayoutEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Panes")
                 .font(.headline)
-            ForEach(StageDisplayPaneKind.allCases, id: \.self) { kind in
+            ForEach(StageDisplayPaneKind.allCases.filter { $0 != .program }, id: \.self) { kind in
                 Toggle(kind.label, isOn: Binding(
                     get: { settings.pane(kind).enabled },
-                    set: { v in updatePane(kind) { $0.enabled = v } }
+                    set: { v in updatePane(kind.rawValue) { $0.enabled = v } }
                 ))
+            }
+            if !settings.programPanes.isEmpty {
+                Divider()
+                // D16: one row per group currently mirrored, added/removed
+                // from the Settings panel's "Mirror on stage display"
+                // checklist — this toggle only shows/hides an existing pane,
+                // matching every other kind's toggle above.
+                ForEach(settings.programPanes) { pane in
+                    Toggle(label(for: pane), isOn: Binding(
+                        get: { pane.enabled },
+                        set: { v in updatePane(pane.id) { $0.enabled = v } }
+                    ))
+                }
             }
             Spacer()
             Text("Drag a box to move it; drag a corner to resize.")
@@ -86,9 +125,21 @@ struct StageDisplayLayoutEditor: View {
         .toggleStyle(.checkbox)
     }
 
-    private func updatePane(_ kind: StageDisplayPaneKind, _ change: (inout StageDisplayPane) -> Void) {
+    /// Display label for one pane's box/checklist row — the group's name for
+    /// a program pane (D16: there can be several, so "Program" alone would
+    /// no longer distinguish them), the kind's label for everything else.
+    private func label(for pane: StageDisplayPane) -> String {
+        guard pane.kind == .program else { return pane.kind.label }
+        guard let groupID = pane.programGroupID,
+              let group = document.show.settings.outputGroups.first(where: { $0.id == groupID }) else {
+            return "Program · (deleted)"
+        }
+        return "Program · \(group.name)"
+    }
+
+    private func updatePane(_ paneID: String, _ change: (inout StageDisplayPane) -> Void) {
         app.updateStageDisplay { s in
-            guard let idx = s.panes.firstIndex(where: { $0.kind == kind }) else { return }
+            guard let idx = s.panes.firstIndex(where: { $0.id == paneID }) else { return }
             change(&s.panes[idx])
             // Read-then-write as SEPARATE statements (never `a[i].x = f(a[i])`
             // in one line — Swift exclusivity trap; see CLAUDE.md).
@@ -110,15 +161,16 @@ struct StageDisplayLayoutEditor: View {
 /// The 16:9 canvas: black background, one `PaneBox` per ENABLED pane.
 private struct LayoutCanvas: View {
     let panes: [StageDisplayPane]
-    let onRectChanged: (StageDisplayPaneKind, StageRect) -> Void
+    let label: (StageDisplayPane) -> String
+    let onRectChanged: (String, StageRect) -> Void
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 Color.black
                 ForEach(panes.filter(\.enabled)) { pane in
-                    PaneBox(pane: pane, canvasSize: geo.size) { newRect in
-                        onRectChanged(pane.kind, newRect)
+                    PaneBox(pane: pane, label: label(pane), canvasSize: geo.size) { newRect in
+                        onRectChanged(pane.id, newRect)
                     }
                 }
             }
@@ -137,6 +189,10 @@ private struct LayoutCanvas: View {
 /// on decode.
 private struct PaneBox: View {
     let pane: StageDisplayPane
+    /// D16: the group's name for a program pane (there can be several),
+    /// the kind's label for everything else — resolved by the caller since
+    /// only it has access to the show's output groups.
+    let label: String
     let canvasSize: CGSize
     let onChange: (StageRect) -> Void
 
@@ -162,7 +218,7 @@ private struct PaneBox: View {
                     RoundedRectangle(cornerRadius: 3)
                         .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                 )
-            Text(pane.kind.label)
+            Text(label)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.accent)
                 .padding(4)

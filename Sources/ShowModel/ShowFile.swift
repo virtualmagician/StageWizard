@@ -148,16 +148,37 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
     public var kind: StageDisplayPaneKind
     public var enabled: Bool
     public var rect: StageRect
+    /// D16: which output group a PROGRAM pane mirrors. Meaningless (always
+    /// nil) for every other kind. The panes array may now hold MULTIPLE
+    /// `.program` panes — one per mirrored group — distinguished by this id;
+    /// a `.program` pane with a nil groupID is a legacy, not-yet-migrated
+    /// entry (see `StageDisplayPane.fillingMissing`) and never survives
+    /// reconciliation.
+    public var programGroupID: UUID?
 
-    public var id: StageDisplayPaneKind { kind }
+    /// Stable per-pane identity for SwiftUI lists/ForEach and lookups: the
+    /// kind's raw value for every non-program kind (exactly one of those
+    /// ever exists), or `"program-<group uuid>"` for a program pane — so
+    /// multiple program panes (one per mirrored group) each get their own
+    /// distinct, stable id. A program pane that hasn't been assigned a group
+    /// yet (only possible transiently, mid-migration) falls back to a fixed
+    /// placeholder id; `fillingMissing` never lets one of those survive into
+    /// a settled `panes` array.
+    public var id: String {
+        switch kind {
+        case .program: programGroupID.map { "program-\($0.uuidString)" } ?? "program-legacy"
+        default: kind.rawValue
+        }
+    }
 
-    public init(kind: StageDisplayPaneKind, enabled: Bool, rect: StageRect) {
+    public init(kind: StageDisplayPaneKind, enabled: Bool, rect: StageRect, programGroupID: UUID? = nil) {
         self.kind = kind
         self.enabled = enabled
         self.rect = Self.clamped(rect)
+        self.programGroupID = programGroupID
     }
 
-    private enum CodingKeys: String, CodingKey { case kind, enabled, rect }
+    private enum CodingKeys: String, CodingKey { case kind, enabled, rect, programGroupID }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -165,6 +186,7 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         let decodedRect = try c.decodeIfPresent(StageRect.self, forKey: .rect) ?? Self.defaultRect(for: kind)
         rect = Self.clamped(decodedRect)
+        programGroupID = try c.decodeIfPresent(UUID.self, forKey: .programGroupID)
     }
 
     /// Smallest a pane may ever be — enforced on every decode AND every
@@ -209,25 +231,56 @@ public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
         }
     }
 
-    /// One pane per kind, in `StageDisplayPaneKind.allCases` order, at
-    /// their default position and enabled state.
+    /// One pane per NON-program kind, at its default position and enabled
+    /// state. No default `.program` pane — D16 program panes only exist once
+    /// the operator picks a group to mirror (there's no meaningful "default"
+    /// group to pre-select), so a fresh show simply mirrors nothing.
     public static var defaults: [StageDisplayPane] {
-        StageDisplayPaneKind.allCases.map {
+        StageDisplayPaneKind.allCases.filter { $0 != .program }.map {
             StageDisplayPane(kind: $0, enabled: defaultEnabled(for: $0), rect: defaultRect(for: $0))
         }
     }
 
-    /// Reconcile a decoded panes array against the full kind set: keeps
-    /// every decoded pane, fills in any kind that's missing (an
-    /// older-minor-version file, or a hand-trimmed array) with its default,
-    /// drops duplicates (last one wins), and always returns exactly one
-    /// pane per kind in the stable order.
-    public static func fillingMissing(_ decoded: [StageDisplayPane]) -> [StageDisplayPane] {
+    /// Reconcile a decoded panes array: every NON-program kind fills in to
+    /// exactly one entry (an older-minor-version file, or a hand-trimmed
+    /// array, gets its default; duplicates drop with last-one-wins) exactly
+    /// as before D16. `.program` panes are handled separately since there
+    /// can now be any number of them, one per mirrored output group:
+    /// `legacyProgramGroupID` (present only when migrating a D13-era file —
+    /// see `StageDisplaySettings.init(from:)`) is grafted onto the first
+    /// still-ungrouped program pane, and any program pane that ends up with
+    /// no group at all (never migrated, or hand-authored without one) is
+    /// dropped — it would mirror nothing. Remaining program panes dedup by
+    /// group (last one wins), keeping first-seen order.
+    public static func fillingMissing(_ decoded: [StageDisplayPane], legacyProgramGroupID: UUID? = nil) -> [StageDisplayPane] {
         var byKind: [StageDisplayPaneKind: StageDisplayPane] = [:]
-        for pane in decoded { byKind[pane.kind] = pane }
-        return StageDisplayPaneKind.allCases.map {
+        var programPanes: [StageDisplayPane] = []
+        for pane in decoded {
+            if pane.kind == .program {
+                programPanes.append(pane)
+            } else {
+                byKind[pane.kind] = pane
+            }
+        }
+        let nonProgram = StageDisplayPaneKind.allCases.filter { $0 != .program }.map {
             byKind[$0] ?? StageDisplayPane(kind: $0, enabled: defaultEnabled(for: $0), rect: defaultRect(for: $0))
         }
+
+        if let legacyProgramGroupID,
+           let idx = programPanes.firstIndex(where: { $0.programGroupID == nil }) {
+            programPanes[idx].programGroupID = legacyProgramGroupID
+        }
+
+        var byGroup: [UUID: StageDisplayPane] = [:]
+        var groupOrder: [UUID] = []
+        for pane in programPanes {
+            guard let groupID = pane.programGroupID else { continue }
+            if byGroup[groupID] == nil { groupOrder.append(groupID) }
+            byGroup[groupID] = pane
+        }
+        let reconciledProgramPanes = groupOrder.compactMap { byGroup[$0] }
+
+        return nonProgram + reconciledProgramPanes
     }
 }
 
@@ -249,61 +302,82 @@ public struct StageDisplaySettings: Codable, Hashable, Sendable {
     public var enabled: Bool
     /// The chosen physical display; nil = none picked yet.
     public var display: DisplayFingerprint?
-    /// Always exactly one entry per `StageDisplayPaneKind`, stable order.
+    /// Exactly one entry per NON-program `StageDisplayPaneKind`, plus zero or
+    /// more `.program` panes — one per output group currently mirrored on
+    /// the stage display (D16). Program panes are distinguished by
+    /// `StageDisplayPane.programGroupID` / `.id`, not by kind.
     public var panes: [StageDisplayPane]
-    /// Output group the PROGRAM pane mirrors; nil = none picked yet (the
-    /// pane can be enabled with no group chosen — it just stays black).
-    public var programGroupID: UUID?
 
     public init(
         enabled: Bool = false,
         display: DisplayFingerprint? = nil,
-        panes: [StageDisplayPane] = StageDisplayPane.defaults,
-        programGroupID: UUID? = nil
+        panes: [StageDisplayPane] = StageDisplayPane.defaults
     ) {
         self.enabled = enabled
         self.display = display
         self.panes = StageDisplayPane.fillingMissing(panes)
-        self.programGroupID = programGroupID
     }
 
-    /// Look up one pane by kind. `panes` is guaranteed (by every
-    /// initializer/decoder) to hold exactly one entry per kind, so this
-    /// always succeeds; the fallback default only guards a theoretical
-    /// invariant violation (never trust that blindly with `!`).
+    /// Look up one pane by kind. Meaningful only for NON-program kinds — for
+    /// those, `panes` is guaranteed (by every initializer/decoder) to hold
+    /// exactly one entry, so this always succeeds; the fallback default only
+    /// guards a theoretical invariant violation (never trust that blindly
+    /// with `!`). For `.program`, prefer `programPanes` or
+    /// `programPane(forGroup:)` — this returns only the FIRST program pane
+    /// (if any), which is rarely what a D16 caller wants.
     public func pane(_ kind: StageDisplayPaneKind) -> StageDisplayPane {
         panes.first { $0.kind == kind }
             ?? StageDisplayPane(kind: kind, enabled: StageDisplayPane.defaultEnabled(for: kind), rect: StageDisplayPane.defaultRect(for: kind))
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case enabled, display, panes, programGroupID
+    /// Every `.program` pane — one per output group currently mirrored on
+    /// the stage display, in `panes` order.
+    public var programPanes: [StageDisplayPane] {
+        panes.filter { $0.kind == .program }
     }
 
-    /// Pre-D13 key names — decode-only (never encoded again once a show
-    /// file is resaved). A pre-D13 dev-build file has NO `panes` key; its
-    /// meaning carries forward into the matching pane's `enabled` flag.
-    /// `standingBy` had no toggle before D13 (always shown) and `program`
-    /// didn't exist, so both fall back to their ordinary defaults.
+    /// The program pane mirroring a specific output group, if any.
+    public func programPane(forGroup groupID: UUID) -> StageDisplayPane? {
+        panes.first { $0.kind == .program && $0.programGroupID == groupID }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, display, panes
+    }
+
+    /// Pre-D13 key names, plus D13-era `programGroupID` — decode-only (never
+    /// encoded again once a show file is resaved). A pre-D13 dev-build file
+    /// has NO `panes` key; its meaning carries forward into the matching
+    /// pane's `enabled` flag. `standingBy` had no toggle before D13 (always
+    /// shown) and `program` didn't exist, so both fall back to their
+    /// ordinary defaults. D13-D15 encoded the program pane's mirrored group
+    /// as this top-level `programGroupID` (exactly one program pane, always);
+    /// D16 moved that onto the pane itself (`StageDisplayPane.programGroupID`)
+    /// to support more than one — see `StageDisplayPane.fillingMissing`.
     private enum LegacyCodingKeys: String, CodingKey {
-        case showsClock, showsShowTimer, showsNotes, showsRunning
+        case showsClock, showsShowTimer, showsNotes, showsRunning, programGroupID
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         display = try container.decodeIfPresent(DisplayFingerprint.self, forKey: .display)
-        programGroupID = try container.decodeIfPresent(UUID.self, forKey: .programGroupID)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
 
         if let decodedPanes = try container.decodeIfPresent([StageDisplayPane].self, forKey: .panes) {
-            panes = StageDisplayPane.fillingMissing(decodedPanes)
+            // D13-D15 files carry the mirrored group as a top-level key
+            // sitting alongside a bare `.program` pane with no groupID of
+            // its own — graft it on. Files that never had a `.program` pane
+            // to begin with (pre-D13) never reach this branch at all (no
+            // `panes` key), so there's nothing to graft onto there.
+            let legacyProgramGroupID = try legacy.decodeIfPresent(UUID.self, forKey: .programGroupID)
+            panes = StageDisplayPane.fillingMissing(decodedPanes, legacyProgramGroupID: legacyProgramGroupID)
         } else {
-            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
             let showsClock = try legacy.decodeIfPresent(Bool.self, forKey: .showsClock) ?? true
             let showsShowTimer = try legacy.decodeIfPresent(Bool.self, forKey: .showsShowTimer) ?? true
             let showsNotes = try legacy.decodeIfPresent(Bool.self, forKey: .showsNotes) ?? true
             let showsRunning = try legacy.decodeIfPresent(Bool.self, forKey: .showsRunning) ?? true
-            panes = StageDisplayPaneKind.allCases.map { kind in
+            panes = StageDisplayPaneKind.allCases.filter { $0 != .program }.map { kind in
                 let enabled: Bool
                 switch kind {
                 case .clock: enabled = showsClock
@@ -311,8 +385,8 @@ public struct StageDisplaySettings: Codable, Hashable, Sendable {
                 case .standingBy: enabled = true
                 case .notes: enabled = showsNotes
                 case .running: enabled = showsRunning
-                case .program: enabled = StageDisplayPane.defaultEnabled(for: .program)
                 case .gesture: enabled = StageDisplayPane.defaultEnabled(for: .gesture)
+                case .program: enabled = false // unreachable — filtered above
                 }
                 return StageDisplayPane(kind: kind, enabled: enabled, rect: StageDisplayPane.defaultRect(for: kind))
             }
