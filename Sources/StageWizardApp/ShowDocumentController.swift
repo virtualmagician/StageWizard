@@ -24,6 +24,10 @@ final class ShowDocumentController {
     /// Fired after new/open replaced the document — the transport must reset
     /// (stop stale playback, clear the old show's playhead).
     @ObservationIgnored var onDocumentReplaced: (@MainActor () -> Void)?
+    /// Fired after undo/redo restored the document — a MUCH lighter touch
+    /// than onDocumentReplaced (playback keeps running; only the playhead
+    /// gets revalidated).
+    @ObservationIgnored var onUndoRestore: (@MainActor () -> Void)?
     /// Fired whenever the recents list gained an entry (open/save).
     @ObservationIgnored var onRecentsChanged: (@MainActor () -> Void)?
 
@@ -48,10 +52,81 @@ final class ShowDocumentController {
         return isDirty ? "\(name) — Edited" : name
     }
 
+    // MARK: - Undo / redo (snapshot-based — shows are small value types)
+
+    private struct UndoEntry {
+        var show: ShowFile
+        var selection: Set<UUID>
+        var timestamp: ContinuousClock.Instant
+    }
+
+    private var undoStack: [UndoEntry] = []
+    private var redoStack: [UndoEntry] = []
+    /// undoStack depth at the last save; nil = the saved state fell off the
+    /// capped stack and can no longer be reached by undoing.
+    private var savePointDepth: Int? = 0
+    /// True while save-time bookkeeping (media rebase) writes the model —
+    /// those are not user edits and must not create undo steps.
+    private var undoRecordingSuspended = false
+    private static let undoCoalesceWindow: Duration = .milliseconds(500)
+    private static let undoCap = 100
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    func undo() {
+        guard let entry = undoStack.popLast() else { return }
+        redoStack.append(currentEntry())
+        restore(entry)
+    }
+
+    func redo() {
+        guard let entry = redoStack.popLast() else { return }
+        undoStack.append(currentEntry())
+        restore(entry)
+    }
+
+    private func currentEntry() -> UndoEntry {
+        // Backdated so a restored state never coalesces with the next edit.
+        UndoEntry(show: show, selection: selection,
+                  timestamp: ContinuousClock.now - .seconds(60))
+    }
+
+    private func restore(_ entry: UndoEntry) {
+        show = entry.show
+        selection = entry.selection.filter { show.cue(withID: $0) != nil }
+        isDirty = savePointDepth != undoStack.count
+        onUndoRestore?()
+    }
+
+    private func recordUndoSnapshot() {
+        guard !undoRecordingSuspended else { return }
+        let now = ContinuousClock.now
+        if let last = undoStack.last, now - last.timestamp < Self.undoCoalesceWindow {
+            // A burst (drag ticks, typing) collapses into one step: keep the
+            // pre-burst snapshot, refresh the clock so the burst continues.
+            undoStack[undoStack.count - 1].timestamp = now
+        } else {
+            undoStack.append(UndoEntry(show: show, selection: selection, timestamp: now))
+            if undoStack.count > Self.undoCap {
+                undoStack.removeFirst()
+                savePointDepth = savePointDepth.flatMap { $0 > 0 ? $0 - 1 : nil }
+            }
+        }
+        redoStack.removeAll()
+    }
+
+    private func resetUndoHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        savePointDepth = 0
+    }
+
     // MARK: - Mutation
 
     /// Single funnel for all model mutations so dirty tracking can't be missed.
     func mutate(_ change: (inout ShowFile) -> Void) {
+        recordUndoSnapshot()
         change(&show)
         isDirty = true
     }
@@ -70,6 +145,7 @@ final class ShowDocumentController {
     func newDocument() {
         guard confirmDiscardIfDirty(action: "creating a new show") else { return }
         show = ShowFile()
+        resetUndoHistory()
         fileURL = nil
         selection = []
         isDirty = false
@@ -89,6 +165,7 @@ final class ShowDocumentController {
         do {
             let data = try Data(contentsOf: url)
             show = try ShowFile.load(from: data)
+            resetUndoHistory()
             fileURL = url
             selection = []
             isDirty = false
@@ -127,13 +204,17 @@ final class ShowDocumentController {
     }
 
     private func write(to url: URL) -> Bool {
+        // Save-time bookkeeping is not a user edit.
+        undoRecordingSuspended = true
         rebaseMediaReferences(newShowFolder: url.deletingLastPathComponent())
+        undoRecordingSuspended = false
         do {
             let data = try show.encoded()
             backupExistingFile(at: url)
             try data.write(to: url, options: .atomic)
             fileURL = url
             isDirty = false
+            savePointDepth = undoStack.count
             NSDocumentController.shared.noteNewRecentDocumentURL(url)
             UserDefaults.standard.set(url.path, forKey: Self.lastShowPathKey)
             onRecentsChanged?()

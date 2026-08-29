@@ -142,6 +142,15 @@ public final class TransportController {
     }
 
     /// Fire a specific cue directly (per-cue hotkeys, double-click).
+    /// After an undo/redo the playhead's cue may no longer exist — clear
+    /// it rather than leave GO pointing into the void.
+    public func revalidatePlayhead() {
+        if let id = playheadID, show().cue(withID: id) == nil {
+            playheadID = nil
+            playheadPastEnd = false
+        }
+    }
+
     public func fire(cueID: UUID) {
         guard !isPanicking, let raw = show().cue(withID: cueID),
               let cue = resolveGOTarget(raw) else { return }

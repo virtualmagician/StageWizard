@@ -106,6 +106,9 @@ final class AppModel {
             self?.refreshRecents()
         }
         refreshRecents()
+        document.onUndoRestore = { [weak self] in
+            self?.transport.revalidatePlayhead()
+        }
         document.onDocumentReplaced = { [weak self] in
             guard let self else { return }
             self.transport.reset()

@@ -47,6 +47,27 @@ struct ShowCommands: Commands {
             Button("Save As…") { document.saveAs() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
         }
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") {
+                // A focused text view keeps its own native undo.
+                if let textView = NSApp.keyWindow?.firstResponder as? NSTextView, textView.isEditable {
+                    textView.undoManager?.undo()
+                } else {
+                    document.undo()
+                }
+            }
+            .keyboardShortcut("z")
+            .disabled(app.isShowMode)
+            Button("Redo") {
+                if let textView = NSApp.keyWindow?.firstResponder as? NSTextView, textView.isEditable {
+                    textView.undoManager?.redo()
+                } else {
+                    document.redo()
+                }
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(app.isShowMode)
+        }
         CommandMenu("Cues") {
             // Every item here edits the show — all disabled in Show mode.
             Button("Add Audio Cue…") { CueFactory.addMediaCue(kind: .audio, to: document) }
