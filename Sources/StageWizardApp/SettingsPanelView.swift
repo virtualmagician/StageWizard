@@ -128,6 +128,7 @@ private struct OutputGroupsTab: View {
     @Environment(ShowDocumentController.self) private var document
     @Environment(AppModel.self) private var app
     @State private var selectedGroupID: UUID?
+    @State private var showingLayoutEditor = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -214,32 +215,50 @@ private struct OutputGroupsTab: View {
                 }
             }
 
+            if settings.pane(.program).enabled {
+                HStack(spacing: 10) {
+                    Text("Program view shows")
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: Binding(
+                        get: { document.show.settings.stageDisplay.programGroupID },
+                        set: { id in app.updateStageDisplay { $0.programGroupID = id } }
+                    )) {
+                        Text("None selected").tag(nil as UUID?)
+                        ForEach(document.show.settings.outputGroups) { group in
+                            Text(group.name).tag(group.id as UUID?)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+            }
+
             HStack(spacing: 16) {
-                Toggle("Clock", isOn: Binding(
-                    get: { settings.showsClock },
-                    set: { v in app.updateStageDisplay { $0.showsClock = v } }
-                ))
-                Toggle("Show timer", isOn: Binding(
-                    get: { settings.showsShowTimer },
-                    set: { v in app.updateStageDisplay { $0.showsShowTimer = v } }
-                ))
-                Toggle("Notes", isOn: Binding(
-                    get: { settings.showsNotes },
-                    set: { v in app.updateStageDisplay { $0.showsNotes = v } }
-                ))
-                Toggle("Running cues", isOn: Binding(
-                    get: { settings.showsRunning },
-                    set: { v in app.updateStageDisplay { $0.showsRunning = v } }
-                ))
+                ForEach(StageDisplayPaneKind.allCases, id: \.self) { kind in
+                    Toggle(kind.label, isOn: Binding(
+                        get: { settings.pane(kind).enabled },
+                        set: { v in app.updateStageDisplay { s in
+                            if let idx = s.panes.firstIndex(where: { $0.kind == kind }) {
+                                s.panes[idx].enabled = v
+                            }
+                        } }
+                    ))
+                }
             }
             .toggleStyle(.checkbox)
 
-            Text("A performer-facing view — never a cue output. Shows in Show and Rehearsal modes.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 10) {
+                Button("Edit Layout…") { showingLayoutEditor = true }
+                Text("A performer-facing view — never a cue output. Shows in Show and Rehearsal modes. The program view only picks up cues that arm AFTER it's turned on.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .sheet(isPresented: $showingLayoutEditor) {
+            StageDisplayLayoutEditor()
+        }
     }
 
     private var groupsSplit: some View {

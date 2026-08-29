@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 // MARK: - Window
@@ -13,8 +14,13 @@ private final class StageDisplayNSWindow: NSWindow {
 }
 
 /// Owns the fullscreen performer-facing "confidence monitor" window — clock,
-/// show timer, standing-by cue + notes, running cues. Reads transport state
-/// only; NEVER a cue target, so it never touches `OutputWindowManager`.
+/// show timer, standing-by cue + notes, running cues, and (D13) a live
+/// PROGRAM pane mirroring an output group. Reads transport state only; NEVER
+/// a cue target itself, so its own window never touches `OutputWindowManager`
+/// — but the program pane's content layer IS registered there (as an
+/// EXTERNAL host, see `OutputWindowManager.registerExternalHost`) so video/
+/// camera/text/slide players can mirror onto it exactly like any other
+/// preview target.
 @MainActor
 final class StageDisplayController {
     /// One level below `OutputWindowManager`'s real output windows
@@ -23,12 +29,33 @@ final class StageDisplayController {
     /// The stage display must never be able to cover real show content.
     static let windowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
 
+    /// Stable identity for the program pane's mirrored output target — a
+    /// `.preview` target like `VirtualCameraManager.monitorTarget`, but
+    /// hosted directly in this window instead of a separate floating one
+    /// (see `OutputWindowManager.registerExternalHost`).
+    static let programTargetID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+    static let programTarget = OutputTarget.preview(id: programTargetID, title: "Stage Display")
+
     /// Set by AppModel right after both are constructed (avoids a
     /// self-before-fully-initialized ordering problem in AppModel.init).
     weak var appModel: AppModel?
 
     private var window: NSWindow?
     private var currentDisplayID: CGDirectDisplayID?
+    /// The program pane's live content layer, registered with
+    /// `OutputWindowManager` while non-nil. A sibling of the SwiftUI
+    /// content's layer, inserted directly BELOW the panic-overlay layer so
+    /// PANIC always covers live program content too.
+    private var programHostLayer: CALayer?
+    /// The always-present (usually invisible) panic-overlay layer, captured
+    /// at window-creation time so the program layer can be inserted below it.
+    private weak var panicLayer: CALayer?
+
+    /// True while the program pane is actively registered as an external
+    /// host — i.e. the window is open AND the program pane is enabled.
+    /// `EngineBridge`'s `stageDisplayProgramGroupID` closure reads this (via
+    /// AppModel) to decide whether a cue's group should ALSO mirror here.
+    var isProgramPaneShowing: Bool { programHostLayer != nil }
 
     /// Pure decision: should the stage display window be open right now?
     /// Factored out of `sync` so it's directly testable without creating
@@ -52,22 +79,77 @@ final class StageDisplayController {
             // Same display: re-assert the frame so a mode/resolution change
             // (reconfiguration storm) doesn't leave it mis-sized.
             window.setFrame(matched.screen.frame, display: true)
+            syncProgramPane(settings: settings, in: window)
             return
         }
         close()
-        window = Self.makeWindow(screen: matched.screen, appModel: appModel)
+        let (newWindow, panic) = Self.makeWindow(screen: matched.screen, appModel: appModel)
+        window = newWindow
+        panicLayer = panic
         currentDisplayID = matched.displayID
+        syncProgramPane(settings: settings, in: newWindow)
     }
 
     private func close() {
         guard let window else { return }
+        teardownProgramPane()
         window.orderOut(nil)
         window.close()
         self.window = nil
+        self.panicLayer = nil
         currentDisplayID = nil
     }
 
-    private static func makeWindow(screen: NSScreen, appModel: AppModel?) -> NSWindow {
+    /// Register/reposition/retire the program pane's live content layer to
+    /// match `settings.pane(.program)`. Safe to call every time settings
+    /// change while the window is open — that's how live drag-edits from
+    /// the layout editor reach it (`AppModel.updateStageDisplay` always
+    /// calls back through `sync`).
+    private func syncProgramPane(settings: StageDisplaySettings, in window: NSWindow) {
+        let pane = settings.pane(.program)
+        guard pane.enabled, let container = window.contentView, let containerLayer = container.layer else {
+            teardownProgramPane()
+            return
+        }
+        let frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+        if let programHostLayer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            programHostLayer.frame = frame
+            CATransaction.commit()
+            return
+        }
+        let layer = CALayer()
+        layer.frame = frame
+        // Transparent by design — the SwiftUI pane behind it paints the
+        // black background + dim "PROGRAM" placeholder; this layer only
+        // ever gains content when a player mirrors onto it, so idle stays
+        // see-through to that placeholder.
+        if let panicLayer {
+            containerLayer.insertSublayer(layer, below: panicLayer)
+        } else {
+            containerLayer.addSublayer(layer)
+        }
+        programHostLayer = layer
+        OutputWindowManager.shared.registerExternalHost(layer, for: Self.programTarget)
+    }
+
+    private func teardownProgramPane() {
+        guard let programHostLayer else { return }
+        OutputWindowManager.shared.unregisterExternalHost(for: Self.programTarget)
+        programHostLayer.removeFromSuperlayer()
+        self.programHostLayer = nil
+    }
+
+    /// Builds the window: a PLAIN (non-flipped, standard AppKit y-up)
+    /// container view hosting two SwiftUI layers — the ordinary panes
+    /// (bottom) and an always-present panic overlay (top) — with the live
+    /// program-pane layer inserted directly BETWEEN them once registered,
+    /// so PANIC always visually wins regardless of what's playing into the
+    /// program pane. Using a plain container (rather than handing the
+    /// program layer straight to the NSHostingView's own layer) keeps our
+    /// raw CALayer out of SwiftUI's internally-managed layer tree entirely.
+    private static func makeWindow(screen: NSScreen, appModel: AppModel?) -> (window: NSWindow, panicLayer: CALayer?) {
         let window = StageDisplayNSWindow(
             contentRect: screen.frame,
             styleMask: [.borderless],
@@ -83,32 +165,66 @@ final class StageDisplayController {
         window.hasShadow = false
         window.isReleasedWhenClosed = false
 
+        let container = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        container.wantsLayer = true
+
+        var panicLayer: CALayer?
         if let appModel {
-            let hosting = NSHostingView(
+            let content = NSHostingView(
                 rootView: StageDisplayContentView()
                     .environment(appModel)
                     .environment(appModel.document)
             )
-            hosting.frame = CGRect(origin: .zero, size: screen.frame.size)
-            hosting.autoresizingMask = [.width, .height]
-            window.contentView = hosting
+            content.frame = container.bounds
+            content.autoresizingMask = [.width, .height]
+            container.addSubview(content)
+
+            let panic = NSHostingView(rootView: StageDisplayPanicOverlay().environment(appModel))
+            panic.frame = container.bounds
+            panic.autoresizingMask = [.width, .height]
+            container.addSubview(panic)
+            panicLayer = panic.layer
         }
+        window.contentView = container
 
         // init(contentRect:screen:) interprets the rect relative to
         // `screen`; normalize to global coordinates like OutputWindowManager.
         window.setFrame(screen.frame, display: true)
         window.orderFrontRegardless()
-        return window
+        return (window, panicLayer)
+    }
+}
+
+/// Convert a normalized, Y-DOWN (top-left origin) `StageRect` — how every
+/// stage-display pane is authored, see `StageDisplayPane` — into an AppKit
+/// Y-UP (bottom-left origin) point-space frame within a container of the
+/// given size. Pure function, factored out for direct unit testing.
+enum StageDisplayGeometry {
+    static func appKitFrame(for rect: StageRect, in containerSize: CGSize) -> CGRect {
+        let width = rect.width * containerSize.width
+        let height = rect.height * containerSize.height
+        let x = rect.x * containerSize.width
+        // The rect's TOP edge is `rect.y * height` down from the container's
+        // top; AppKit measures UP from the bottom, so the frame's origin is
+        // the container height minus the rect's BOTTOM edge (top + height).
+        let y = containerSize.height - (rect.y * containerSize.height) - height
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 }
 
 // MARK: - Content
 
-/// The stage display's SwiftUI content. Reads transport/document state live
-/// via the environment, reusing exactly the accessors ActiveCuesPanel /
+/// The stage display's SwiftUI content — PANE-DRIVEN (D13): each enabled
+/// pane is positioned at its own normalized rect instead of a fixed
+/// top/hero/bottom layout. Reads transport/document state live via the
+/// environment, reusing exactly the accessors ActiveCuesPanel /
 /// StandingByHeader / TransportSidebar already read — no new runtime
-/// queries. Black background, white/gray text, everything sized relative
-/// to the display so it reads at a glance from across a stage.
+/// queries. Black background, white/gray text, every pane's fonts sized
+/// relative to ITS OWN rect so it reads at a glance regardless of how the
+/// operator arranges the layout. PANIC is NOT handled here — it's a
+/// separate always-on-top overlay (`StageDisplayPanicOverlay`) so it
+/// visually wins over the live program pane too, which lives in a raw
+/// CALayer outside this view's own tree.
 struct StageDisplayContentView: View {
     @Environment(AppModel.self) private var app
     @Environment(ShowDocumentController.self) private var document
@@ -117,114 +233,183 @@ struct StageDisplayContentView: View {
 
     var body: some View {
         GeometryReader { geo in
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 Color.black
-                VStack(spacing: 0) {
-                    if settings.showsClock || settings.showsShowTimer {
-                        topRow(geo)
-                            .padding(.bottom, geo.size.height * 0.02)
+                ForEach(StageDisplayPaneKind.allCases, id: \.self) { kind in
+                    let pane = settings.pane(kind)
+                    if pane.enabled {
+                        let size = CGSize(
+                            width: geo.size.width * pane.rect.width,
+                            height: geo.size.height * pane.rect.height
+                        )
+                        paneView(kind, size: size)
+                            .frame(width: size.width, height: size.height)
+                            .position(
+                                x: geo.size.width * (pane.rect.x + pane.rect.width / 2),
+                                y: geo.size.height * (pane.rect.y + pane.rect.height / 2)
+                            )
                     }
-                    Spacer(minLength: 0)
-                    heroSection(geo)
-                    Spacer(minLength: 0)
-                    bottomArea(geo)
                 }
-                .padding(geo.size.width * 0.035)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
         .ignoresSafeArea()
     }
 
-    // MARK: Top row — wall clock (left) + show timer (right)
+    @ViewBuilder
+    private func paneView(_ kind: StageDisplayPaneKind, size: CGSize) -> some View {
+        switch kind {
+        case .clock: clockPane(size: size)
+        case .showTimer: showTimerPane(size: size)
+        case .standingBy: standingByPane(size: size)
+        case .notes: notesPane(size: size)
+        case .running: runningPane(size: size)
+        case .program: programPane(size: size)
+        }
+    }
+
+    // MARK: Clock
+
+    private func clockPane(size: CGSize) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(StageDisplayFormat.wallClock(context.date))
+                .font(.system(size: size.height * 0.7, weight: .semibold, design: .monospaced))
+                .minimumScaleFactor(0.3)
+                .lineLimit(1)
+                .foregroundStyle(.white)
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+        }
+    }
+
+    // MARK: Show timer
 
     @ViewBuilder
-    private func topRow(_ geo: GeometryProxy) -> some View {
-        HStack(alignment: .top) {
-            if settings.showsClock {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(StageDisplayFormat.wallClock(context.date))
-                        .font(.system(size: geo.size.height * 0.05, weight: .semibold, design: .monospaced))
+    private func showTimerPane(size: CGSize) -> some View {
+        if let startedAt = app.showModeEnteredAt {
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                VStack(alignment: .trailing, spacing: size.height * 0.06) {
+                    Text("SHOW")
+                        .font(.system(size: size.height * 0.22, weight: .semibold))
+                        .foregroundStyle(.gray)
+                    Text(StageDisplayFormat.elapsed(from: startedAt, to: context.date))
+                        .font(.system(size: size.height * 0.6, weight: .semibold, design: .monospaced))
+                        .minimumScaleFactor(0.3)
+                        .lineLimit(1)
                         .foregroundStyle(.white)
                 }
-            }
-            Spacer()
-            if settings.showsShowTimer, let startedAt = app.showModeEnteredAt {
-                TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("SHOW")
-                            .font(.system(size: geo.size.height * 0.016, weight: .semibold))
-                            .foregroundStyle(.gray)
-                        Text(StageDisplayFormat.elapsed(from: startedAt, to: context.date))
-                            .font(.system(size: geo.size.height * 0.05, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                    }
-                }
+                .frame(width: size.width, height: size.height, alignment: .topTrailing)
             }
         }
     }
 
-    // MARK: Hero — standing-by cue (the largest thing on screen)
+    // MARK: Standing by — the hero pane
 
     @ViewBuilder
-    private func heroSection(_ geo: GeometryProxy) -> some View {
-        VStack(spacing: geo.size.height * 0.02) {
+    private func standingByPane(size: CGSize) -> some View {
+        VStack(spacing: size.height * 0.04) {
             if let cue = app.transport.standingByCue {
                 Text(cue.number)
-                    .font(.system(size: geo.size.height * 0.035, weight: .semibold, design: .monospaced))
+                    .font(.system(size: size.height * 0.12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.gray)
                 Text(cue.displayName)
-                    .font(.system(size: geo.size.height * 0.16, weight: .bold))
+                    .font(.system(size: size.height * 0.5, weight: .bold))
                     .minimumScaleFactor(0.15)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white)
-                if settings.showsNotes {
-                    let notes = document.cue(withID: cue.id)?.notes ?? ""
-                    if !notes.isEmpty {
-                        Text(notes)
-                            .font(.system(size: geo.size.height * 0.024))
-                            .foregroundStyle(.gray)
-                            .lineLimit(4)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, geo.size.width * 0.08)
-                    }
-                }
             } else if app.transport.isPlayheadPastEnd {
                 Text("END OF SHOW")
-                    .font(.system(size: geo.size.height * 0.07, weight: .bold))
+                    .font(.system(size: size.height * 0.22, weight: .bold))
                     .foregroundStyle(.gray)
             } else {
                 Text("—")
-                    .font(.system(size: geo.size.height * 0.1, weight: .bold))
+                    .font(.system(size: size.height * 0.3, weight: .bold))
                     .foregroundStyle(.gray)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: size.width, height: size.height)
     }
 
-    // MARK: Bottom — running cues, or PANIC taking over the same area
+    // MARK: Notes — the standing-by cue's notes, its own pane
 
     @ViewBuilder
-    private func bottomArea(_ geo: GeometryProxy) -> some View {
-        if app.transport.isPanicking {
-            Text("PANIC")
-                .font(.system(size: geo.size.height * 0.06, weight: .black))
-                .foregroundStyle(.red)
-                .frame(maxWidth: .infinity)
-        } else if settings.showsRunning, !app.transport.registry.isEmpty {
+    private func notesPane(size: CGSize) -> some View {
+        if let cue = app.transport.standingByCue {
+            let notes = document.cue(withID: cue.id)?.notes ?? ""
+            if !notes.isEmpty {
+                Text(notes)
+                    .font(.system(size: size.height * 0.3))
+                    .minimumScaleFactor(0.4)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.gray)
+                    .frame(width: size.width, height: size.height)
+            }
+        }
+    }
+
+    // MARK: Running cues
+
+    @ViewBuilder
+    private func runningPane(size: CGSize) -> some View {
+        if !app.transport.registry.isEmpty {
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                VStack(alignment: .leading, spacing: geo.size.height * 0.012) {
+                VStack(alignment: .leading, spacing: size.height * 0.04) {
                     ForEach(app.transport.registry.instances) { instance in
                         StageDisplayRunningRow(
                             instance: instance,
-                            rowFontSize: geo.size.height * 0.02,
+                            rowFontSize: size.height * 0.14,
                             now: context.date
                         )
                     }
                 }
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
             }
         }
+    }
+
+    // MARK: Program — placeholder; the LIVE layer is hosted outside SwiftUI
+
+    /// Always-black with a dim "PROGRAM" watermark. The actual mirrored cue
+    /// content is a raw CALayer `StageDisplayController` positions directly
+    /// over this same screen rect (see `syncProgramPane`) — transparent
+    /// until a player attaches, so this watermark shows through whenever
+    /// nothing is currently routed here.
+    private func programPane(size: CGSize) -> some View {
+        ZStack {
+            Color.black
+            Text("PROGRAM")
+                .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundStyle(.white.opacity(0.15))
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+}
+
+/// Always-present, full-screen, on-top-of-everything panic indicator —
+/// including the program pane's live CALayer, which is NOT part of this
+/// view's own SwiftUI tree and would otherwise sit above it. Renders
+/// nothing while not panicking (a transparent NSHostingView), so it never
+/// steals visibility from the ordinary panes.
+struct StageDisplayPanicOverlay: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        GeometryReader { geo in
+            if app.transport.isPanicking {
+                ZStack {
+                    Theme.panic
+                    Text("PANIC")
+                        .font(.system(size: geo.size.height * 0.12, weight: .black))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
     }
 }
 

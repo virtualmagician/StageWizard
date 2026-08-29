@@ -47,17 +47,52 @@ final class PreviewContentView: NSView {
 public final class OutputWindowManager {
     public static let shared = OutputWindowManager()
 
+    /// `@MainActor` explicitly: nesting inside a global-actor-isolated class
+    /// does NOT itself isolate a nested type's own members — without this,
+    /// `layer`/`window` below (touching `NSWindow.contentView`/`NSView.layer`,
+    /// both MainActor-isolated) fail to typecheck from a nonisolated context.
+    @MainActor
     private struct Entry {
-        let window: NSWindow
+        /// Either a real window this manager owns, or a layer some OUTSIDE
+        /// owner (the stage display's program pane, D13) registered — see
+        /// `registerExternalHost`. External entries are never opened/closed
+        /// here; only the external owner's `unregisterExternalHost` retires them.
+        enum Host {
+            case window(NSWindow)
+            case external(CALayer)
+        }
+        var host: Host
         var leaseCount: Int
         /// Preview windows persist while rehearsal mode is on, even at 0 leases.
         var pinned: Bool
         /// True when created with a test frame override — display-change
         /// handling then leaves the frame alone.
         let usesFrameOverride: Bool
+
+        var layer: CALayer? {
+            switch host {
+            case .window(let window): window.contentView?.layer
+            case .external(let layer): layer
+            }
+        }
+
+        var window: NSWindow? {
+            if case .window(let window) = host { return window }
+            return nil
+        }
+
+        var isExternal: Bool {
+            if case .external = host { return true }
+            return false
+        }
     }
 
     private var entries: [OutputTarget: Entry] = [:]
+
+    /// Preview targets an outside owner is hosting directly (D13: the stage
+    /// display's program pane) — see `registerExternalHost`. Consulted by
+    /// `hostLayer(for:)` BEFORE it would otherwise create a floating window.
+    private var externalHosts: [OutputTarget: CALayer] = [:]
 
     /// Fired after a rehearsal preview re-lays-out (resize) — the app uses it
     /// to re-apply stage-relative geometry to running players.
@@ -69,18 +104,26 @@ public final class OutputWindowManager {
 
     /// Layer to which a video/camera cue attaches its output layer. Creates
     /// and shows the target's window lazily; each call takes one lease.
+    /// A `.preview` target with a registered external host (see
+    /// `registerExternalHost`) returns that layer instead of opening a
+    /// floating window — one decode, an extra layer, no new window.
     ///
     /// - Parameter frameOverride: global-coordinates window frame for unit
     ///   tests (e.g. 320x180) instead of covering the whole screen. Ignored
     ///   when the target's window already exists.
     public func hostLayer(for target: OutputTarget, frameOverride: CGRect? = nil) throws -> CALayer {
         if var entry = entries[target] {
-            guard let layer = entry.window.contentView?.layer else {
+            guard let layer = entry.layer else {
                 throw VideoEngineError.windowUnavailable
             }
             entry.leaseCount += 1
             entries[target] = entry
             return layer
+        }
+
+        if let externalLayer = externalHosts[target] {
+            entries[target] = Entry(host: .external(externalLayer), leaseCount: 1, pinned: false, usesFrameOverride: false)
+            return externalLayer
         }
 
         let window: NSWindow
@@ -96,7 +139,7 @@ public final class OutputWindowManager {
             throw VideoEngineError.windowUnavailable
         }
         entries[target] = Entry(
-            window: window,
+            host: .window(window),
             leaseCount: 1,
             pinned: false,
             usesFrameOverride: frameOverride != nil
@@ -110,13 +153,17 @@ public final class OutputWindowManager {
     }
 
     /// Release one lease taken by `hostLayer(for:)`. Display windows close
-    /// when the last video layer is gone; pinned previews stay open.
+    /// when the last video layer is gone; pinned previews stay open; an
+    /// externally-hosted layer (D13 program pane) is never closed here —
+    /// its owner controls its lifetime via `unregisterExternalHost`.
     public func releaseLayer(for target: OutputTarget) {
         guard var entry = entries[target] else { return }
         entry.leaseCount -= 1
         if entry.leaseCount <= 0 && !entry.pinned {
-            entry.window.orderOut(nil)
-            entry.window.close()
+            if case .window(let window) = entry.host {
+                window.orderOut(nil)
+                window.close()
+            }
             entries[target] = nil
         } else {
             entries[target] = entry
@@ -127,45 +174,78 @@ public final class OutputWindowManager {
         releaseLayer(for: .display(displayID))
     }
 
+    // MARK: - External hosts (D13: stage display program pane)
+
+    /// Register `layer` as the host for `target` (must be a `.preview`
+    /// target) — henceforth `hostLayer(for:)` hands it out directly instead
+    /// of opening a floating window; leasing/counting works exactly as it
+    /// does for a window-backed target. The caller (StageDisplayController)
+    /// owns `layer`'s membership in its own layer tree and its geometry;
+    /// this manager only tracks it for leasing.
+    public func registerExternalHost(_ layer: CALayer, for target: OutputTarget) {
+        externalHosts[target] = layer
+    }
+
+    /// Retire an external host: no MORE cues will be routed here (a future
+    /// `hostLayer(for:)` for this target falls through to opening an
+    /// ordinary floating window, same as any other never-registered
+    /// preview). Any player CURRENTLY hosted here keeps playing into
+    /// `layer` — it's still part of the caller's view/layer tree until the
+    /// caller itself removes it — and its eventual `releaseLayer` call
+    /// no-ops harmlessly (same pattern as `closeAllPreviews`' orphaned
+    /// leases below): we drop OUR bookkeeping now rather than wait for
+    /// leases to drain, because the caller is about to tear down (or has
+    /// torn down) the layer itself.
+    public func unregisterExternalHost(for target: OutputTarget) {
+        externalHosts[target] = nil
+        if let entry = entries[target], entry.isExternal {
+            entries[target] = nil
+        }
+    }
+
     // MARK: - Rehearsal previews
 
     /// Open (or keep) a pinned preview window for an output group — one per
     /// assigned video output while rehearsal mode is active.
     public func openPreview(id: UUID, title: String) {
         let target = OutputTarget.preview(id: id, title: title)
-        if var entry = entries[target] {
+        if var entry = entries[target], case .window(let window) = entry.host {
             entry.pinned = true
             entries[target] = entry
-            entry.window.orderFront(nil)
+            window.orderFront(nil)
             return
         }
         let window = Self.makePreviewWindow(id: id, title: title, frameOverride: nil)
-        entries[target] = Entry(window: window, leaseCount: 0, pinned: true, usesFrameOverride: false)
+        entries[target] = Entry(host: .window(window), leaseCount: 0, pinned: true, usesFrameOverride: false)
     }
 
     /// Close every preview window (leaving rehearsal mode). Players still
     /// holding leases have been stopped by the mode switch; their later
     /// releaseLayer calls no-op harmlessly. Previews in `keeping` survive —
     /// the virtual-webcam monitor must outlive mode switches while feeding.
+    /// Externally-hosted targets (D13 program pane) are never touched here —
+    /// rehearsal preview lifecycle has nothing to do with the stage display.
     public func closeAllPreviews(keeping: Set<UUID> = []) {
         for (target, entry) in entries {
-            if case .preview(let id, _) = target, !keeping.contains(id) {
-                entry.window.orderOut(nil)
-                entry.window.close()
-                entries[target] = nil
-            }
+            guard case .preview(let id, _) = target, !keeping.contains(id),
+                  case .window(let window) = entry.host else { continue }
+            window.orderOut(nil)
+            window.close()
+            entries[target] = nil
         }
     }
 
     /// Close one preview: unpin, and close now unless cues still render
-    /// into it (then it closes when the last lease is released).
+    /// into it (then it closes when the last lease is released). A no-op
+    /// for an externally-hosted target — see `unregisterExternalHost`.
     public func closePreview(id: UUID) {
         for (target, var entry) in entries {
-            guard case .preview(let previewID, _) = target, previewID == id else { continue }
+            guard case .preview(let previewID, _) = target, previewID == id,
+                  case .window(let window) = entry.host else { continue }
             entry.pinned = false
             if entry.leaseCount <= 0 {
-                entry.window.orderOut(nil)
-                entry.window.close()
+                window.orderOut(nil)
+                window.close()
                 entries[target] = nil
             } else {
                 entries[target] = entry
@@ -248,18 +328,21 @@ public final class OutputWindowManager {
     /// display gets a fresh window (with a fresh frame) on the next
     /// `hostLayer(for:)` call.
     public func handleDisplaysChanged(connected: [ConnectedDisplay]) {
+        // `.display` targets are always window-backed in practice (only
+        // `.preview` targets are ever externally hosted), so `entry.window`
+        // is never nil here — optional-chained defensively regardless.
         let connectedIDs = Set(connected.map(\.displayID))
         for (target, entry) in entries {
             guard let displayID = target.displayID else { continue }
             if !connectedIDs.contains(displayID) {
-                entry.window.orderOut(nil)
-                entry.window.close()
+                entry.window?.orderOut(nil)
+                entry.window?.close()
                 entries[target] = nil
             }
         }
         for display in connected {
             if let entry = entries[.display(display.displayID)], !entry.usesFrameOverride {
-                entry.window.setFrame(display.screen.frame, display: true)
+                entry.window?.setFrame(display.screen.frame, display: true)
             }
         }
     }

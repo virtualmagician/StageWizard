@@ -126,49 +126,189 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     ]
 }
 
+/// The six things the stage display can show. Order here is the STABLE
+/// order used everywhere panes are enumerated (settings UI, layout editor,
+/// `StageDisplaySettings.panes` after migration/fill-in) — changing it
+/// changes nothing functionally (each pane is looked up by kind) but keeps
+/// lists/checklists from reordering across app versions.
+public enum StageDisplayPaneKind: String, Codable, CaseIterable, Sendable {
+    case clock, showTimer, standingBy, notes, running, program
+}
+
+/// One region of the stage display: whether it's shown, and where — in
+/// NORMALIZED, Y-DOWN coordinates (origin top-left, same as screen/window
+/// coordinates in most UI toolkits) — deliberately the OPPOSITE convention
+/// from `StageRect`'s other use (`TextBody.box`, bottom-left/y-up, matching
+/// stage/layer space) because pane layout is authored top-down like any
+/// other 2D UI canvas; `StageDisplayGeometry.appKitFrame` converts to
+/// AppKit's y-up window space when the program pane hosts a live layer.
+public struct StageDisplayPane: Codable, Hashable, Sendable, Identifiable {
+    public var kind: StageDisplayPaneKind
+    public var enabled: Bool
+    public var rect: StageRect
+
+    public var id: StageDisplayPaneKind { kind }
+
+    public init(kind: StageDisplayPaneKind, enabled: Bool, rect: StageRect) {
+        self.kind = kind
+        self.enabled = enabled
+        self.rect = Self.clamped(rect)
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, enabled, rect }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(StageDisplayPaneKind.self, forKey: .kind)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        let decodedRect = try c.decodeIfPresent(StageRect.self, forKey: .rect) ?? Self.defaultRect(for: kind)
+        rect = Self.clamped(decodedRect)
+    }
+
+    /// Smallest a pane may ever be — enforced on every decode AND every
+    /// live edit (layout editor drags), so a corrupt/hand-edited show file
+    /// or an aggressive resize can never collapse a pane to nothing.
+    public static let minimumSize = (width: 0.05, height: 0.04)
+
+    /// Clamp fully inside 0...1 with the enforced minimum size. Also guards
+    /// against non-finite numbers (NaN/inf from bad hand-edited JSON)
+    /// collapsing the whole layout.
+    public static func clamped(_ rect: StageRect) -> StageRect {
+        let width = (rect.width.isFinite ? rect.width : minimumSize.width).clamped(to: minimumSize.width...1)
+        let height = (rect.height.isFinite ? rect.height : minimumSize.height).clamped(to: minimumSize.height...1)
+        let x = (rect.x.isFinite ? rect.x : 0).clamped(to: 0...(1 - width))
+        let y = (rect.y.isFinite ? rect.y : 0).clamped(to: 0...(1 - height))
+        return StageRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// Default position/size per pane — chosen so all six fit the 16:9
+    /// stage without overlapping badly out of the box; the operator
+    /// rearranges from there in the layout editor.
+    public static func defaultRect(for kind: StageDisplayPaneKind) -> StageRect {
+        switch kind {
+        case .clock: StageRect(x: 0.02, y: 0.02, width: 0.30, height: 0.12)
+        case .showTimer: StageRect(x: 0.68, y: 0.02, width: 0.30, height: 0.12)
+        case .standingBy: StageRect(x: 0.05, y: 0.18, width: 0.90, height: 0.34)
+        case .notes: StageRect(x: 0.10, y: 0.55, width: 0.80, height: 0.15)
+        case .running: StageRect(x: 0.02, y: 0.72, width: 0.96, height: 0.26)
+        case .program: StageRect(x: 0.62, y: 0.52, width: 0.36, height: 0.18)
+        }
+    }
+
+    /// Every pane starts enabled EXCEPT the program view — it targets no
+    /// output group until the operator picks one, so showing it by default
+    /// would just be a black box.
+    public static func defaultEnabled(for kind: StageDisplayPaneKind) -> Bool {
+        kind != .program
+    }
+
+    /// One pane per kind, in `StageDisplayPaneKind.allCases` order, at
+    /// their default position and enabled state.
+    public static var defaults: [StageDisplayPane] {
+        StageDisplayPaneKind.allCases.map {
+            StageDisplayPane(kind: $0, enabled: defaultEnabled(for: $0), rect: defaultRect(for: $0))
+        }
+    }
+
+    /// Reconcile a decoded panes array against the full kind set: keeps
+    /// every decoded pane, fills in any kind that's missing (an
+    /// older-minor-version file, or a hand-trimmed array) with its default,
+    /// drops duplicates (last one wins), and always returns exactly one
+    /// pane per kind in the stable order.
+    public static func fillingMissing(_ decoded: [StageDisplayPane]) -> [StageDisplayPane] {
+        var byKind: [StageDisplayPaneKind: StageDisplayPane] = [:]
+        for pane in decoded { byKind[pane.kind] = pane }
+        return StageDisplayPaneKind.allCases.map {
+            byKind[$0] ?? StageDisplayPane(kind: $0, enabled: defaultEnabled(for: $0), rect: defaultRect(for: $0))
+        }
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
 /// A fullscreen performer-facing confidence monitor (clock, show timer,
-/// standing-by cue + notes, running cues) shown on a chosen display while
-/// the workspace is in Show or Rehearsal mode. Reads transport state only —
-/// it is NEVER a cue target, so it uses the same `DisplayFingerprint`
+/// standing-by cue, notes, running cues, and — D13 — a live PROGRAM view
+/// mirroring an output group) shown on a chosen display while the workspace
+/// is in Show or Rehearsal mode. Reads transport state only (the program
+/// view is the one exception: it also mirrors real cue output) — it is
+/// NEVER a cue target itself, so it uses the same `DisplayFingerprint`
 /// matching mechanism as `OutputGroup.displays` but is otherwise unrelated
 /// to output routing.
 public struct StageDisplaySettings: Codable, Hashable, Sendable {
     public var enabled: Bool
     /// The chosen physical display; nil = none picked yet.
     public var display: DisplayFingerprint?
-    public var showsClock: Bool
-    public var showsShowTimer: Bool
-    public var showsNotes: Bool
-    public var showsRunning: Bool
+    /// Always exactly one entry per `StageDisplayPaneKind`, stable order.
+    public var panes: [StageDisplayPane]
+    /// Output group the PROGRAM pane mirrors; nil = none picked yet (the
+    /// pane can be enabled with no group chosen — it just stays black).
+    public var programGroupID: UUID?
 
     public init(
         enabled: Bool = false,
         display: DisplayFingerprint? = nil,
-        showsClock: Bool = true,
-        showsShowTimer: Bool = true,
-        showsNotes: Bool = true,
-        showsRunning: Bool = true
+        panes: [StageDisplayPane] = StageDisplayPane.defaults,
+        programGroupID: UUID? = nil
     ) {
         self.enabled = enabled
         self.display = display
-        self.showsClock = showsClock
-        self.showsShowTimer = showsShowTimer
-        self.showsNotes = showsNotes
-        self.showsRunning = showsRunning
+        self.panes = StageDisplayPane.fillingMissing(panes)
+        self.programGroupID = programGroupID
+    }
+
+    /// Look up one pane by kind. `panes` is guaranteed (by every
+    /// initializer/decoder) to hold exactly one entry per kind, so this
+    /// always succeeds; the fallback default only guards a theoretical
+    /// invariant violation (never trust that blindly with `!`).
+    public func pane(_ kind: StageDisplayPaneKind) -> StageDisplayPane {
+        panes.first { $0.kind == kind }
+            ?? StageDisplayPane(kind: kind, enabled: StageDisplayPane.defaultEnabled(for: kind), rect: StageDisplayPane.defaultRect(for: kind))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, display, showsClock, showsShowTimer, showsNotes, showsRunning
+        case enabled, display, panes, programGroupID
+    }
+
+    /// Pre-D13 key names — decode-only (never encoded again once a show
+    /// file is resaved). A pre-D13 dev-build file has NO `panes` key; its
+    /// meaning carries forward into the matching pane's `enabled` flag.
+    /// `standingBy` had no toggle before D13 (always shown) and `program`
+    /// didn't exist, so both fall back to their ordinary defaults.
+    private enum LegacyCodingKeys: String, CodingKey {
+        case showsClock, showsShowTimer, showsNotes, showsRunning
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
         display = try container.decodeIfPresent(DisplayFingerprint.self, forKey: .display)
-        showsClock = try container.decodeIfPresent(Bool.self, forKey: .showsClock) ?? true
-        showsShowTimer = try container.decodeIfPresent(Bool.self, forKey: .showsShowTimer) ?? true
-        showsNotes = try container.decodeIfPresent(Bool.self, forKey: .showsNotes) ?? true
-        showsRunning = try container.decodeIfPresent(Bool.self, forKey: .showsRunning) ?? true
+        programGroupID = try container.decodeIfPresent(UUID.self, forKey: .programGroupID)
+
+        if let decodedPanes = try container.decodeIfPresent([StageDisplayPane].self, forKey: .panes) {
+            panes = StageDisplayPane.fillingMissing(decodedPanes)
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            let showsClock = try legacy.decodeIfPresent(Bool.self, forKey: .showsClock) ?? true
+            let showsShowTimer = try legacy.decodeIfPresent(Bool.self, forKey: .showsShowTimer) ?? true
+            let showsNotes = try legacy.decodeIfPresent(Bool.self, forKey: .showsNotes) ?? true
+            let showsRunning = try legacy.decodeIfPresent(Bool.self, forKey: .showsRunning) ?? true
+            panes = StageDisplayPaneKind.allCases.map { kind in
+                let enabled: Bool
+                switch kind {
+                case .clock: enabled = showsClock
+                case .showTimer: enabled = showsShowTimer
+                case .standingBy: enabled = true
+                case .notes: enabled = showsNotes
+                case .running: enabled = showsRunning
+                case .program: enabled = StageDisplayPane.defaultEnabled(for: .program)
+                }
+                return StageDisplayPane(kind: kind, enabled: enabled, rect: StageDisplayPane.defaultRect(for: kind))
+            }
+        }
     }
 }
 

@@ -257,6 +257,14 @@ final class AppModel {
         provider.virtualCameraFeeding = { [weak self] in
             self?.virtualCamera.isFeeding ?? false
         }
+        // D13: the stage display's PROGRAM pane mirrors one output group's
+        // live cues — nil whenever the pane isn't currently showing (window
+        // closed, or the pane disabled), same "extra target" shape as
+        // virtualCameraFeeding above.
+        provider.stageDisplayProgramGroupID = { [weak self] in
+            guard let self, self.stageDisplayController.isProgramPaneShowing else { return nil }
+            return self.document.show.settings.stageDisplay.programGroupID
+        }
         // D11 (experimental) gesture GO: fire GO exactly as a bound key
         // would, but never while editing — a magician rehearsing gestures
         // in Show/Rehearsal wants this; someone editing the show does not.
