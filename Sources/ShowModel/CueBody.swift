@@ -377,25 +377,46 @@ public struct CameraEffects: Codable, Hashable, Sendable {
     public var dustPreset: String?
     /// Particle size multiplier, 0.5…10.
     public var dustScale: Double
+    /// Green-screen keying: pixels near `chromaKeyColor` turn transparent.
+    /// Runs BEFORE segmentation in the pipeline, so the two compose (a
+    /// keyed-out background still shows through a segmentation hole too).
+    public var chromaKey: Bool
+    /// The color to key out. Defaults to pure green.
+    public var chromaKeyColor: RGBAColor
+    /// YCbCr chroma-distance threshold, 0…1: how close to `chromaKeyColor`
+    /// (luma-independent) counts as background.
+    public var chromaTolerance: Double
+    /// Width of the smoothstep falloff band straddling `chromaTolerance`,
+    /// 0…1 — 0 is a hard cutoff, larger softens the edge.
+    public var chromaSoftness: Double
 
     public init(
         segmentation: Bool = false,
         magicDust: Bool = false,
         dustEmitter: MediaReference? = nil,
         dustPreset: String? = nil,
-        dustScale: Double = 1
+        dustScale: Double = 1,
+        chromaKey: Bool = false,
+        chromaKeyColor: RGBAColor = RGBAColor(red: 0, green: 1, blue: 0),
+        chromaTolerance: Double = 0.35,
+        chromaSoftness: Double = 0.1
     ) {
         self.segmentation = segmentation
         self.magicDust = magicDust
         self.dustEmitter = dustEmitter
         self.dustPreset = dustPreset
         self.dustScale = min(max(dustScale, 0.5), 10)
+        self.chromaKey = chromaKey
+        self.chromaKeyColor = chromaKeyColor
+        self.chromaTolerance = min(max(chromaTolerance, 0), 1)
+        self.chromaSoftness = min(max(chromaSoftness, 0), 1)
     }
 
-    public var anyEnabled: Bool { segmentation || magicDust }
+    public var anyEnabled: Bool { segmentation || magicDust || chromaKey }
 
     private enum CodingKeys: String, CodingKey {
         case segmentation, magicDust, dustEmitter, dustPreset, dustScale
+        case chromaKey, chromaKeyColor, chromaTolerance, chromaSoftness
     }
 
     public init(from decoder: Decoder) throws {
@@ -405,6 +426,12 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         dustEmitter = try c.decodeIfPresent(MediaReference.self, forKey: .dustEmitter)
         dustPreset = try c.decodeIfPresent(String.self, forKey: .dustPreset)
         dustScale = min(max(try c.decodeIfPresent(Double.self, forKey: .dustScale) ?? 1, 0.5), 10)
+        // Pre-D10 files predate chroma key; default off, pure green, 0.35/0.1.
+        chromaKey = try c.decodeIfPresent(Bool.self, forKey: .chromaKey) ?? false
+        chromaKeyColor = try c.decodeIfPresent(RGBAColor.self, forKey: .chromaKeyColor)
+            ?? RGBAColor(red: 0, green: 1, blue: 0)
+        chromaTolerance = min(max(try c.decodeIfPresent(Double.self, forKey: .chromaTolerance) ?? 0.35, 0), 1)
+        chromaSoftness = min(max(try c.decodeIfPresent(Double.self, forKey: .chromaSoftness) ?? 0.1, 0), 1)
     }
 }
 

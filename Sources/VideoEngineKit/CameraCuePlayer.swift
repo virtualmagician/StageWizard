@@ -282,7 +282,11 @@ public final class CameraCuePlayer: MediaPlayback {
         processor.configure(
             segmentation: effects.segmentation,
             handTracking: effects.magicDust,
-            mirrored: processorMirrors
+            mirrored: processorMirrors,
+            chromaKey: effects.chromaKey,
+            chromaKeyColor: effects.chromaKeyColor,
+            chromaTolerance: effects.chromaTolerance,
+            chromaSoftness: effects.chromaSoftness
         ) { [weak self] product in
             Task { @MainActor in
                 self?.showProcessedFrame(product)

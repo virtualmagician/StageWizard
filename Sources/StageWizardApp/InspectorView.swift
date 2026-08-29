@@ -1285,6 +1285,57 @@ private struct CameraOutputSettings: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
+
+                Toggle("Chroma key", isOn: Binding(
+                    get: { camera.effects.chromaKey },
+                    set: { v in updateEffects { $0.chromaKey = v } }
+                ))
+                if camera.effects.chromaKey {
+                    ColorPicker("Key color", selection: Binding(
+                        get: {
+                            let c = camera.effects.chromaKeyColor
+                            return Color(red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
+                        },
+                        set: { color in
+                            let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .green
+                            updateEffects {
+                                $0.chromaKeyColor = RGBAColor(
+                                    red: resolved.redComponent, green: resolved.greenComponent,
+                                    blue: resolved.blueComponent, alpha: resolved.alphaComponent
+                                )
+                            }
+                        }
+                    ), supportsOpacity: false)
+                    .frame(maxWidth: 280)
+
+                    HStack(spacing: 8) {
+                        Text("Tolerance")
+                        Slider(value: Binding(
+                            get: { camera.effects.chromaTolerance },
+                            set: { v in updateEffects { $0.chromaTolerance = v } }
+                        ), in: 0...1)
+                        .frame(maxWidth: 240)
+                        Text(String(format: "%.2f", camera.effects.chromaTolerance))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    HStack(spacing: 8) {
+                        Text("Softness")
+                        Slider(value: Binding(
+                            get: { camera.effects.chromaSoftness },
+                            set: { v in updateEffects { $0.chromaSoftness = v } }
+                        ), in: 0...1)
+                        .frame(maxWidth: 240)
+                        Text(String(format: "%.2f", camera.effects.chromaSoftness))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 48, alignment: .trailing)
+                    }
+                    Text("Pixels near the key color turn transparent — put video or images on a LOWER layer (Geometry tab) and they show behind the performer.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .formStyle(.columns)
             .padding(12)
