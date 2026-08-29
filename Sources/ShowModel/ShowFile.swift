@@ -77,7 +77,11 @@ public struct ShowFile: Codable, Hashable, Sendable {
     /// 2: video/camera cues target OutputGroups instead of raw displays.
     /// 3: GroupMode.enterAndPlayFirst (older apps can't decode the new mode,
     ///    so they must refuse v3 files cleanly instead of failing mid-parse).
-    public static let currentFormatVersion = 3
+    /// 4: FollowAction.autoContinueAtMarker (older apps' FollowAction decoder
+    ///    throws on the unknown "mode" string, which would fail the whole
+    ///    file mid-parse — so v4 files must be refused cleanly instead; no
+    ///    migration needed, v3 files still decode as-is).
+    public static let currentFormatVersion = 4
 
     public var formatVersion: Int
     public var settings: ShowSettings

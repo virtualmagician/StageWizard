@@ -1,22 +1,49 @@
 import Foundation
 
+/// A named point in a media cue's file-time axis (same axis as
+/// AudioBody/VideoBody startTime/endTime trim). Purely descriptive — the only
+/// runtime behavior it drives today is `FollowAction.autoContinueAtMarker`.
+public struct CueMarker: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    /// Seconds from file start (media/file time, not wall clock).
+    public var time: TimeInterval
+    public var name: String
+
+    public init(id: UUID = UUID(), time: TimeInterval, name: String) {
+        self.id = id
+        self.time = time
+        self.name = name
+    }
+}
+
 /// What happens to the *next* cue when this one runs.
 /// Orthogonal to media end behavior: auto-continue is anchored to this cue's
 /// START (+ postWait); auto-follow fires when this cue's action COMPLETES.
 public enum FollowAction: Hashable, Sendable {
     case none
     case autoContinue(postWait: TimeInterval)
+    /// Like autoContinue, but anchored to a marker in the SOURCE cue's media
+    /// (audio/video only) instead of a fixed post-wait. A marker id that no
+    /// longer resolves (deleted) is treated as no follow at all — see
+    /// TransportController.fire.
+    case autoContinueAtMarker(markerID: UUID)
     case autoFollow
+
+    public var isAutoContinueAtMarker: Bool {
+        if case .autoContinueAtMarker = self { return true }
+        return false
+    }
 }
 
 extension FollowAction: Codable {
     private enum CodingKeys: String, CodingKey {
         case mode
         case postWait
+        case markerID
     }
 
     private enum Mode: String, Codable {
-        case none, autoContinue, autoFollow
+        case none, autoContinue, autoContinueAtMarker, autoFollow
     }
 
     public init(from decoder: Decoder) throws {
@@ -27,6 +54,9 @@ extension FollowAction: Codable {
         case .autoContinue:
             let postWait = try container.decodeIfPresent(TimeInterval.self, forKey: .postWait) ?? 0
             self = .autoContinue(postWait: postWait)
+        case .autoContinueAtMarker:
+            let markerID = try container.decode(UUID.self, forKey: .markerID)
+            self = .autoContinueAtMarker(markerID: markerID)
         case .autoFollow:
             self = .autoFollow
         }
@@ -40,6 +70,9 @@ extension FollowAction: Codable {
         case .autoContinue(let postWait):
             try container.encode(Mode.autoContinue, forKey: .mode)
             try container.encode(postWait, forKey: .postWait)
+        case .autoContinueAtMarker(let markerID):
+            try container.encode(Mode.autoContinueAtMarker, forKey: .mode)
+            try container.encode(markerID, forKey: .markerID)
         case .autoFollow:
             try container.encode(Mode.autoFollow, forKey: .mode)
         }

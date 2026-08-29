@@ -183,8 +183,42 @@ public final class TransportController {
                 nextCueID: next.id,
                 delay: cue.preWait + postWait
             )
+        } else if case .autoContinueAtMarker(let markerID) = cue.follow, let next = nextCue(after: cue),
+                  let delay = markerDelay(for: cue, markerID: markerID) {
+            // A marker id that no longer resolves (deleted) is a silent
+            // no-op — no follow is armed at all, same "no surprise fire"
+            // spirit as a fade cue with no target.
+            schedulePendingFollow(
+                sourceInstance: instance.id,
+                nextCueID: next.id,
+                delay: delay
+            )
         }
         instance.begin()
+    }
+
+    /// Wall-clock delay from cue fire to the moment playback reaches
+    /// `markerID`, folding in preWait, the in-point trim, and rate. Audio/
+    /// video only; nil if the body doesn't carry that marker (e.g. deleted).
+    private func markerDelay(for cue: Cue, markerID: UUID) -> TimeInterval? {
+        let markers: [CueMarker]
+        let startTime: TimeInterval
+        let rate: Double
+        switch cue.body {
+        case .audio(let body):
+            markers = body.markers
+            startTime = body.startTime
+            rate = body.rate
+        case .video(let body):
+            markers = body.markers
+            startTime = body.startTime
+            rate = body.rate
+        default:
+            return nil
+        }
+        guard let marker = markers.first(where: { $0.id == markerID }) else { return nil }
+        let mediaOffset = max(0, marker.time - startTime) / rate
+        return cue.preWait + mediaOffset
     }
 
     private func makeInstance(for cue: Cue) -> CueInstance {

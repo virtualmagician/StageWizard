@@ -59,6 +59,7 @@ struct WaveformTrimEditor: View {
     let fileURL: URL
     @Binding var startTime: TimeInterval
     @Binding var endTime: TimeInterval?
+    @Binding var markers: [CueMarker]
 
     @State private var waveform: WaveformData?
     @State private var loadFailed = false
@@ -66,7 +67,7 @@ struct WaveformTrimEditor: View {
     var body: some View {
         Group {
             if let waveform, waveform.duration > 0 {
-                TrimTimeline(duration: waveform.duration, startTime: $startTime, endTime: $endTime) { size in
+                TrimTimeline(duration: waveform.duration, startTime: $startTime, endTime: $endTime, markers: $markers) { size in
                     WaveformShape(data: waveform)
                         .fill(.tint.opacity(0.85))
                         .frame(width: size.width, height: size.height)
@@ -122,7 +123,11 @@ struct TrimTimeline<Content: View>: View {
     let duration: TimeInterval
     @Binding var startTime: TimeInterval
     @Binding var endTime: TimeInterval?
+    @Binding var markers: [CueMarker]
     @ViewBuilder var content: (CGSize) -> Content
+
+    @State private var renamingMarkerID: UUID?
+    @State private var renameText: String = ""
 
     private var effectiveEnd: TimeInterval { endTime ?? duration }
 
@@ -142,6 +147,10 @@ struct TrimTimeline<Content: View>: View {
                         .frame(width: max(0, width - x(for: effectiveEnd, width: width)))
                         .offset(x: x(for: effectiveEnd, width: width))
 
+                    ForEach(markers) { cueMarker in
+                        markerHandle(cueMarker, width: width, height: geo.size.height)
+                    }
+
                     marker(color: .green)
                         .position(x: x(for: startTime, width: width), y: geo.size.height / 2)
                         .gesture(dragGesture(width: width) { t in
@@ -156,6 +165,13 @@ struct TrimTimeline<Content: View>: View {
                         })
                         .help("OUT point — drag (snap to far right for file end)")
                 }
+                .contentShape(Rectangle())
+                .gesture(
+                    SpatialTapGesture(count: 2).onEnded { value in
+                        guard width > 0 else { return }
+                        addMarker(at: TimeInterval(value.location.x / width) * duration)
+                    }
+                )
             }
             .frame(height: 72)
             .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
@@ -165,6 +181,14 @@ struct TrimTimeline<Content: View>: View {
                 Text("IN " + Timecode.format(startTime))
                     .foregroundStyle(.green)
                 Spacer()
+                Button {
+                    addMarker(at: (startTime + effectiveEnd) / 2)
+                } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(.plain)
+                .help("Add a marker at the center of the trim range")
+                Spacer()
                 Text(Timecode.format(duration))
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -172,6 +196,19 @@ struct TrimTimeline<Content: View>: View {
                     .foregroundStyle(.red)
             }
             .font(.caption2.monospacedDigit())
+        }
+        .alert("Rename Marker", isPresented: Binding(
+            get: { renamingMarkerID != nil },
+            set: { if !$0 { renamingMarkerID = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) { renamingMarkerID = nil }
+            Button("Rename") {
+                if let id = renamingMarkerID { renameMarker(id, to: renameText) }
+                renamingMarkerID = nil
+            }
+        } message: {
+            Text("Enter a new name for this marker.")
         }
     }
 
@@ -199,6 +236,73 @@ struct TrimTimeline<Content: View>: View {
         }
         .frame(width: 16, height: 72)   // generous hit target
         .contentShape(Rectangle())
+    }
+
+    /// A named cue marker: diamond handle at top + thin line down the lane,
+    /// draggable, dimmed outside the trim range, renamed/deleted via context menu.
+    private func markerHandle(_ cueMarker: CueMarker, width: CGFloat, height: CGFloat) -> some View {
+        let dimmed = cueMarker.time < startTime || cueMarker.time > effectiveEnd
+        return VStack(spacing: 0) {
+            MarkerDiamond()
+                .fill(Theme.accent)
+                .frame(width: 9, height: 9)
+            Rectangle()
+                .fill(Theme.accent)
+                .frame(width: 1.5)
+        }
+        .frame(width: 16, height: height)
+        .opacity(dimmed ? 0.35 : 1)
+        .overlay(alignment: .top) {
+            Text(cueMarker.name)
+                .font(.system(size: 8))
+                .foregroundStyle(Theme.accent)
+                .fixedSize()
+                .offset(y: -11)
+        }
+        .contentShape(Rectangle())
+        .position(x: x(for: cueMarker.time, width: width), y: height / 2)
+        .gesture(dragGesture(width: width) { t in
+            updateMarkerTime(cueMarker.id, to: min(max(0, t), duration))
+        })
+        .contextMenu {
+            Button("Rename…") {
+                renamingMarkerID = cueMarker.id
+                renameText = cueMarker.name
+            }
+            Button("Delete", role: .destructive) {
+                markers.removeAll { $0.id == cueMarker.id }
+            }
+        }
+        .help("\(cueMarker.name) — \(Timecode.format(cueMarker.time))")
+    }
+
+    private func addMarker(at time: TimeInterval) {
+        let clamped = min(max(0, time), duration)
+        markers.append(CueMarker(time: clamped, name: "Marker \(markers.count + 1)"))
+    }
+
+    private func updateMarkerTime(_ id: UUID, to time: TimeInterval) {
+        guard let index = markers.firstIndex(where: { $0.id == id }) else { return }
+        markers[index].time = time
+    }
+
+    private func renameMarker(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = markers.firstIndex(where: { $0.id == id }) else { return }
+        markers[index].name = trimmed
+    }
+}
+
+/// Small diamond shape for marker handles.
+private struct MarkerDiamond: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -233,6 +337,7 @@ struct VideoTrimEditor: View {
     let fileURL: URL
     @Binding var startTime: TimeInterval
     @Binding var endTime: TimeInterval?
+    @Binding var markers: [CueMarker]
 
     @State private var thumbnails: [CGImage] = []
     @State private var duration: TimeInterval = 0
@@ -243,7 +348,7 @@ struct VideoTrimEditor: View {
     var body: some View {
         VStack(spacing: 6) {
             if duration > 0 {
-                TrimTimeline(duration: duration, startTime: $startTime, endTime: $endTime) { size in
+                TrimTimeline(duration: duration, startTime: $startTime, endTime: $endTime, markers: $markers) { size in
                     filmstrip(size: size)
                 }
                 .overlay(alignment: .top) {

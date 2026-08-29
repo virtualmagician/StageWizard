@@ -431,6 +431,10 @@ struct CueRowView: View {
             Image(systemName: "arrow.down")
                 .foregroundStyle(Theme.standby)
                 .help("Auto-continue: next cue fires after post-wait")
+        case .autoContinueAtMarker:
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(Theme.standby)
+                .help("Auto-continue at marker")
         case .autoFollow:
             Image(systemName: "arrow.down.to.line")
                 .foregroundStyle(Theme.standby)

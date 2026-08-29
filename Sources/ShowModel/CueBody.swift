@@ -151,6 +151,9 @@ public struct AudioBody: Codable, Hashable, Sendable {
     /// Playback speed multiplier, 0.25…4 (1 = normal). Applied via
     /// AVAudioUnitVarispeed, which is tape-style — pitch shifts with rate.
     public var rate: Double
+    /// Named points on the file-time axis; UI-authored, and the anchor for
+    /// FollowAction.autoContinueAtMarker.
+    public var markers: [CueMarker]
 
     public init(
         media: MediaReference,
@@ -163,7 +166,8 @@ public struct AudioBody: Codable, Hashable, Sendable {
         fadeOutDuration: TimeInterval = 0,
         outputDeviceUID: String? = nil,
         outputDeviceName: String? = nil,
-        rate: Double = 1
+        rate: Double = 1,
+        markers: [CueMarker] = []
     ) {
         self.media = media
         self.startTime = startTime
@@ -176,11 +180,12 @@ public struct AudioBody: Codable, Hashable, Sendable {
         self.outputDeviceUID = outputDeviceUID
         self.outputDeviceName = outputDeviceName
         self.rate = min(max(rate, 0.25), 4)
+        self.markers = markers
     }
 
     private enum CodingKeys: String, CodingKey {
         case media, startTime, endTime, playCount, infiniteLoop, volumeDB
-        case fadeInDuration, fadeOutDuration, outputDeviceUID, outputDeviceName, rate
+        case fadeInDuration, fadeOutDuration, outputDeviceUID, outputDeviceName, rate, markers
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,6 +202,8 @@ public struct AudioBody: Codable, Hashable, Sendable {
         outputDeviceName = try c.decodeIfPresent(String.self, forKey: .outputDeviceName)
         // Pre-D3 files predate rate; default to normal speed.
         rate = min(max(try c.decodeIfPresent(Double.self, forKey: .rate) ?? 1, 0.25), 4)
+        // Pre-D4 files predate markers.
+        markers = try c.decodeIfPresent([CueMarker].self, forKey: .markers) ?? []
     }
 }
 
@@ -275,6 +282,9 @@ public struct VideoBody: Codable, Hashable, Sendable {
     public var layer: Int
     /// Playback speed multiplier, 0.25…4 (1 = normal).
     public var rate: Double
+    /// Named points on the file-time axis; UI-authored, and the anchor for
+    /// FollowAction.autoContinueAtMarker.
+    public var markers: [CueMarker]
 
     public init(
         media: MediaReference,
@@ -293,7 +303,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
         layer: Int = 5,
-        rate: Double = 1
+        rate: Double = 1,
+        markers: [CueMarker] = []
     ) {
         self.media = media
         self.startTime = startTime
@@ -312,12 +323,13 @@ public struct VideoBody: Codable, Hashable, Sendable {
         self.fadeOutDuration = fadeOutDuration
         self.layer = layer.clampedToLayerRange
         self.rate = min(max(rate, 0.25), 4)
+        self.markers = markers
     }
 
     private enum CodingKeys: String, CodingKey {
         case media, startTime, endTime, playCount, infiniteLoop, volumeDB
         case audioDeviceUID, audioDeviceName, display, outputGroupID
-        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration, layer, rate
+        case fillMode, geometry, endBehavior, fadeInDuration, fadeOutDuration, layer, rate, markers
     }
 
     public init(from decoder: Decoder) throws {
@@ -341,6 +353,8 @@ public struct VideoBody: Codable, Hashable, Sendable {
         layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
         // Pre-D3 files predate rate; default to normal speed.
         rate = min(max(try c.decodeIfPresent(Double.self, forKey: .rate) ?? 1, 0.25), 4)
+        // Pre-D4 files predate markers.
+        markers = try c.decodeIfPresent([CueMarker].self, forKey: .markers) ?? []
     }
 }
 

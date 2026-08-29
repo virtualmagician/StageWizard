@@ -116,6 +116,7 @@ private struct BasicsTab: View {
                     set: { v in document.updateCue(cueID) { $0.preWait = v } }
                 ))
                 FollowPicker(cueID: cueID)
+                    .id(cueID)   // wantsMarkerMode is per-cue state; a capture can't outlive the selection
             }
             .formStyle(.columns)
             .padding(12)
@@ -232,46 +233,107 @@ private struct FollowPicker: View {
     @Environment(ShowDocumentController.self) private var document
     let cueID: UUID
 
+    /// Selected while the operator has picked marker-follow but the cue has
+    /// no markers yet — the model stays `.none` (see mode setter below), so
+    /// this remembers the picker's own selection until markers exist.
+    @State private var wantsMarkerMode = false
+
     private enum Mode: String, CaseIterable {
         case none = "No follow"
         case autoContinue = "Auto-continue"
+        case markerFollow = "Auto-continue at marker"
         case autoFollow = "Auto-follow"
+    }
+
+    /// Marker-follow only makes sense for audio/video bodies.
+    private func availableModes(for cue: Cue) -> [Mode] {
+        switch cue.body {
+        case .audio, .video: return Mode.allCases
+        default: return [.none, .autoContinue, .autoFollow]
+        }
+    }
+
+    private func markers(for cue: Cue) -> [CueMarker] {
+        switch cue.body {
+        case .audio(let b): return b.markers
+        case .video(let b): return b.markers
+        default: return []
+        }
     }
 
     var body: some View {
         if let cue = document.cue(withID: cueID) {
-            HStack(spacing: 12) {
-                Picker("Follow", selection: Binding(
-                    get: {
-                        switch cue.follow {
-                        case .none: Mode.none
-                        case .autoContinue: Mode.autoContinue
-                        case .autoFollow: Mode.autoFollow
-                        }
-                    },
-                    set: { (mode: Mode) in
-                        document.updateCue(cueID) {
-                            switch mode {
-                            case .none: $0.follow = .none
-                            case .autoContinue:
-                                let postWait: TimeInterval =
-                                    if case .autoContinue(let w) = cue.follow { w } else { 0 }
-                                $0.follow = .autoContinue(postWait: postWait)
-                            case .autoFollow: $0.follow = .autoFollow
+            let markers = markers(for: cue)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    Picker("Follow", selection: Binding(
+                        get: {
+                            switch cue.follow {
+                            case .none: wantsMarkerMode ? Mode.markerFollow : Mode.none
+                            case .autoContinue: Mode.autoContinue
+                            case .autoContinueAtMarker: Mode.markerFollow
+                            case .autoFollow: Mode.autoFollow
+                            }
+                        },
+                        set: { (mode: Mode) in
+                            wantsMarkerMode = mode == .markerFollow
+                            document.updateCue(cueID) {
+                                switch mode {
+                                case .none: $0.follow = .none
+                                case .autoContinue:
+                                    let postWait: TimeInterval =
+                                        if case .autoContinue(let w) = cue.follow { w } else { 0 }
+                                    $0.follow = .autoContinue(postWait: postWait)
+                                case .markerFollow:
+                                    // No markers yet: keep .none behavior and
+                                    // just show the "add a marker" caption.
+                                    if let first = markers.first {
+                                        $0.follow = .autoContinueAtMarker(markerID: first.id)
+                                    } else {
+                                        $0.follow = .none
+                                    }
+                                case .autoFollow: $0.follow = .autoFollow
+                                }
                             }
                         }
+                    )) {
+                        ForEach(availableModes(for: cue), id: \.self) { Text($0.rawValue) }
                     }
-                )) {
-                    ForEach(Mode.allCases, id: \.self) { Text($0.rawValue) }
-                }
-                .frame(width: 260)
+                    .frame(width: 260)
 
-                if case .autoContinue(let postWait) = cue.follow {
-                    TimecodeField(label: "Post-Cue", value: Binding(
-                        get: { postWait },
-                        set: { v in document.updateCue(cueID) { $0.follow = .autoContinue(postWait: v) } }
-                    ))
+                    if case .autoContinue(let postWait) = cue.follow {
+                        TimecodeField(label: "Post-Cue", value: Binding(
+                            get: { postWait },
+                            set: { v in document.updateCue(cueID) { $0.follow = .autoContinue(postWait: v) } }
+                        ))
+                    }
+
+                    if case .autoContinueAtMarker(let markerID) = cue.follow, !markers.isEmpty {
+                        Picker("Marker", selection: Binding(
+                            get: { markerID },
+                            set: { v in document.updateCue(cueID) { $0.follow = .autoContinueAtMarker(markerID: v) } }
+                        )) {
+                            ForEach(markers) { marker in
+                                Text("\(marker.name) · \(Timecode.format(marker.time))").tag(marker.id)
+                            }
+                        }
+                        .frame(width: 260)
+                    }
                 }
+
+                if markers.isEmpty, wantsMarkerMode || cue.follow.isAutoContinueAtMarker {
+                    Text("Add markers in the Time & Levels editor first")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            // The mode was picked before any markers existed (follow stayed
+            // .none) — once the operator adds one in the trim editor, latch
+            // onto it instead of leaving the picker in a dead-looking state.
+            .onChange(of: markers) { _, newMarkers in
+                guard wantsMarkerMode, let first = newMarkers.first,
+                      case .none = document.cue(withID: cueID)?.follow ?? .none else { return }
+                document.updateCue(cueID) { $0.follow = .autoContinueAtMarker(markerID: first.id) }
             }
         }
     }
@@ -427,13 +489,15 @@ private struct MediaTimingForm: View {
                     WaveformTrimEditor(
                         fileURL: url,
                         startTime: mediaBinding(\.startTime) { $0.startTime = max(0, $1) },
-                        endTime: mediaBinding(\.endTime) { $0.endTime = $1 }
+                        endTime: mediaBinding(\.endTime) { $0.endTime = $1 },
+                        markers: mediaBinding(\.markers) { $0.markers = $1 }
                     )
                 case .video:
                     VideoTrimEditor(
                         fileURL: url,
                         startTime: mediaBinding(\.startTime) { $0.startTime = max(0, $1) },
-                        endTime: mediaBinding(\.endTime) { $0.endTime = $1 }
+                        endTime: mediaBinding(\.endTime) { $0.endTime = $1 },
+                        markers: mediaBinding(\.markers) { $0.markers = $1 }
                     )
                 default:
                     EmptyView()
@@ -461,6 +525,7 @@ private struct MediaTimingForm: View {
         var fadeInDuration: TimeInterval
         var fadeOutDuration: TimeInterval
         var rate: Double
+        var markers: [CueMarker]
     }
 
     private func clampedRate(_ value: Double) -> Double { min(max(value, 0.25), 4) }
@@ -471,12 +536,12 @@ private struct MediaTimingForm: View {
             MediaValues(startTime: b.startTime, endTime: b.endTime, playCount: b.playCount,
                         infiniteLoop: b.infiniteLoop, volumeDB: b.volumeDB,
                         fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration,
-                        rate: b.rate)
+                        rate: b.rate, markers: b.markers)
         case .video(let b):
             MediaValues(startTime: b.startTime, endTime: b.endTime, playCount: b.playCount,
                         infiniteLoop: b.infiniteLoop, volumeDB: b.volumeDB,
                         fadeInDuration: b.fadeInDuration, fadeOutDuration: b.fadeOutDuration,
-                        rate: b.rate)
+                        rate: b.rate, markers: b.markers)
         default:
             nil
         }
@@ -521,7 +586,7 @@ private struct MediaTimingForm: View {
                 guard let cue = document.cue(withID: cueID), let values = mediaValues(cue) else {
                     return get(MediaValues(
                         startTime: 0, endTime: nil, playCount: 1, infiniteLoop: false,
-                        volumeDB: 0, fadeInDuration: 0, fadeOutDuration: 0, rate: 1
+                        volumeDB: 0, fadeInDuration: 0, fadeOutDuration: 0, rate: 1, markers: []
                     ))
                 }
                 return get(values)
@@ -540,33 +605,34 @@ private struct MediaTimingForm: View {
         var fadeInDuration: TimeInterval
         var fadeOutDuration: TimeInterval
         var rate: Double
+        var markers: [CueMarker]
 
         init(audio b: AudioBody) {
             startTime = b.startTime; endTime = b.endTime; playCount = b.playCount
             infiniteLoop = b.infiniteLoop; volumeDB = b.volumeDB
             fadeInDuration = b.fadeInDuration; fadeOutDuration = b.fadeOutDuration
-            rate = b.rate
+            rate = b.rate; markers = b.markers
         }
 
         init(video b: VideoBody) {
             startTime = b.startTime; endTime = b.endTime; playCount = b.playCount
             infiniteLoop = b.infiniteLoop; volumeDB = b.volumeDB
             fadeInDuration = b.fadeInDuration; fadeOutDuration = b.fadeOutDuration
-            rate = b.rate
+            rate = b.rate; markers = b.markers
         }
 
         func apply(to b: inout AudioBody) {
             b.startTime = startTime; b.endTime = endTime; b.playCount = playCount
             b.infiniteLoop = infiniteLoop; b.volumeDB = volumeDB
             b.fadeInDuration = fadeInDuration; b.fadeOutDuration = fadeOutDuration
-            b.rate = rate
+            b.rate = rate; b.markers = markers
         }
 
         func apply(to b: inout VideoBody) {
             b.startTime = startTime; b.endTime = endTime; b.playCount = playCount
             b.infiniteLoop = infiniteLoop; b.volumeDB = volumeDB
             b.fadeInDuration = fadeInDuration; b.fadeOutDuration = fadeOutDuration
-            b.rate = rate
+            b.rate = rate; b.markers = markers
         }
     }
 }
