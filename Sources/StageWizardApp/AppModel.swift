@@ -10,6 +10,10 @@ final class AppModel {
     let document: ShowDocumentController
     let transport: TransportController
     let shortcuts: ShortcutManager
+    /// Single funnel every remote-control surface routes through.
+    let triggerRouter = TriggerRouter()
+    /// CoreMIDI listener — MIDI is TriggerRouter's first client.
+    let midiController = MIDIController()
 
     struct OperatorWarning: Identifiable {
         let id = UUID()
@@ -147,6 +151,7 @@ final class AppModel {
             // freshly opened document.
             self.setMode(self.document.show.settings.workspaceMode, persist: false)
             self.syncVirtualCameraFeed()
+            self.syncMIDIEnabled()
         }
 
         shortcuts.bindingsProvider = { [weak self] in
@@ -164,6 +169,14 @@ final class AppModel {
         shortcuts.onCueHotkey = { [weak self] cueID in self?.transport.fire(cueID: cueID) }
         shortcuts.onAction = { [weak self] action in self?.perform(action) }
         shortcuts.install()
+
+        triggerRouter.appModel = self
+        midiController.bindingsProvider = { [weak self] in
+            self?.document.show.settings.midiBindings ?? []
+        }
+        midiController.onAction = { [weak self] action in
+            self?.triggerRouter.route(action)
+        }
     }
 
     private func wireEngines(provider: EnginePlayerProvider) {
@@ -304,6 +317,28 @@ final class AppModel {
         }
     }
 
+    /// Start/stop the CoreMIDI listener AND remember the choice in the show
+    /// file — reopening the show restores it. Active in every workspace mode
+    /// while enabled, same as hotkeys.
+    func setMIDIEnabled(_ enabled: Bool) {
+        document.mutate { $0.settings.midiEnabled = enabled }
+        applyMIDIEnabled(enabled)
+    }
+
+    /// Reconcile the running listener with what the current show wants —
+    /// called on document replace (new/open).
+    func syncMIDIEnabled() {
+        applyMIDIEnabled(document.show.settings.midiEnabled)
+    }
+
+    private func applyMIDIEnabled(_ wanted: Bool) {
+        if wanted {
+            midiController.start()
+        } else {
+            midiController.stop()
+        }
+    }
+
     /// Push a camera cue's effects to any running instances — segmentation
     /// and magic dust toggle live, no session restart.
     func pushEffects(cueID: UUID) {
@@ -341,7 +376,11 @@ final class AppModel {
         }
     }
 
-    private func perform(_ action: ShortcutAction) {
+    /// Single dispatch point for transport verbs. Internal (not private) so
+    /// TriggerRouter — the funnel every remote (MIDI/OSC/web/gesture) routes
+    /// through — can reach it; no extra guards belong here or in the router,
+    /// this switch IS the semantics.
+    func perform(_ action: ShortcutAction) {
         switch action {
         case .go: transport.go()
         case .stopAll: transport.stopAll()

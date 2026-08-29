@@ -24,6 +24,11 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     /// Whether the virtual-webcam feed should run for this show —
     /// restored on open (when the camera extension is active).
     public var virtualCameraFeed: Bool
+    /// Whether the CoreMIDI listener should run for this show. Active in
+    /// every workspace mode while true (same as hotkeys).
+    public var midiEnabled: Bool
+    /// MIDI-Learn assignments: a MIDI trigger mapped to a transport action.
+    public var midiBindings: [MIDIBindingEntry]
 
     public init(
         panicDuration: TimeInterval = 3,
@@ -32,7 +37,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         keyBindings: [ShortcutAction: KeyBinding] = ShowSettings.defaultBindings,
         outputGroups: [OutputGroup] = [],
         workspaceMode: WorkspaceMode = .edit,
-        virtualCameraFeed: Bool = false
+        virtualCameraFeed: Bool = false,
+        midiEnabled: Bool = false,
+        midiBindings: [MIDIBindingEntry] = []
     ) {
         self.panicDuration = panicDuration
         self.doubleGOProtection = doubleGOProtection
@@ -41,11 +48,13 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         self.outputGroups = outputGroups
         self.workspaceMode = workspaceMode
         self.virtualCameraFeed = virtualCameraFeed
+        self.midiEnabled = midiEnabled
+        self.midiBindings = midiBindings
     }
 
     private enum CodingKeys: String, CodingKey {
         case panicDuration, doubleGOProtection, armAheadCount, keyBindings, outputGroups, workspaceMode
-        case virtualCameraFeed
+        case virtualCameraFeed, midiEnabled, midiBindings
     }
 
     public init(from decoder: Decoder) throws {
@@ -58,6 +67,9 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         outputGroups = try container.decodeIfPresent([OutputGroup].self, forKey: .outputGroups) ?? []
         workspaceMode = try container.decodeIfPresent(WorkspaceMode.self, forKey: .workspaceMode) ?? .edit
         virtualCameraFeed = try container.decodeIfPresent(Bool.self, forKey: .virtualCameraFeed) ?? false
+        // Pre-D6 files predate MIDI remote control entirely.
+        midiEnabled = try container.decodeIfPresent(Bool.self, forKey: .midiEnabled) ?? false
+        midiBindings = try container.decodeIfPresent([MIDIBindingEntry].self, forKey: .midiBindings) ?? []
     }
 
     public func group(withID id: UUID) -> OutputGroup? {

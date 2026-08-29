@@ -12,6 +12,7 @@ struct SettingsPanelView: View {
         case general = "General"
         case outputs = "Video Outputs"
         case shortcuts = "Shortcuts"
+        case remote = "Remote"
     }
 
     var body: some View {
@@ -25,7 +26,7 @@ struct SettingsPanelView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 340)
+                .frame(width: 420)
             }
             .padding()
 
@@ -36,6 +37,7 @@ struct SettingsPanelView: View {
                 case .general: GeneralSettingsTab()
                 case .outputs: OutputGroupsTab()
                 case .shortcuts: ShortcutBindingsForm()
+                case .remote: RemoteSettingsTab()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
