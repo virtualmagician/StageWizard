@@ -127,6 +127,8 @@ private struct OutputGroupsTab: View {
         VStack(spacing: 0) {
             virtualWebcamBar
             Divider()
+            stageDisplaySection
+            Divider()
             groupsSplit
         }
     }
@@ -159,6 +161,76 @@ private struct OutputGroupsTab: View {
                 Button("Activate…") { app.virtualCamera.activate() }
                     .help("Installs the StageWizard Camera extension (one-time macOS approval). Requires running from /Applications.")
             }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// A performer-facing confidence monitor on a chosen display — enable,
+    /// pick a display, choose what it shows. Reads transport state only;
+    /// never a cue target, so it lives alongside output routing but isn't
+    /// part of it.
+    private var stageDisplaySection: some View {
+        let settings = document.show.settings.stageDisplay
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "rectangle.on.rectangle")
+                Text("Stage Display")
+                    .fontWeight(.semibold)
+                Spacer()
+                Toggle("Enabled", isOn: Binding(
+                    get: { settings.enabled },
+                    set: { v in app.updateStageDisplay { $0.enabled = v } }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+            }
+
+            HStack(spacing: 10) {
+                Text("Display")
+                    .foregroundStyle(.secondary)
+                Picker("", selection: Binding(
+                    get: { document.show.settings.stageDisplay.display },
+                    set: { fingerprint in app.updateStageDisplay { $0.display = fingerprint } }
+                )) {
+                    Text("None selected").tag(nil as DisplayFingerprint?)
+                    ForEach(DisplayManager.shared.displays, id: \.displayID) { connected in
+                        Text(connected.fingerprint.name).tag(connected.fingerprint as DisplayFingerprint?)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+
+                if let chosen = settings.display, DisplayManager.shared.match(chosen) == nil {
+                    Label("“\(chosen.name)” is not connected", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            HStack(spacing: 16) {
+                Toggle("Clock", isOn: Binding(
+                    get: { settings.showsClock },
+                    set: { v in app.updateStageDisplay { $0.showsClock = v } }
+                ))
+                Toggle("Show timer", isOn: Binding(
+                    get: { settings.showsShowTimer },
+                    set: { v in app.updateStageDisplay { $0.showsShowTimer = v } }
+                ))
+                Toggle("Notes", isOn: Binding(
+                    get: { settings.showsNotes },
+                    set: { v in app.updateStageDisplay { $0.showsNotes = v } }
+                ))
+                Toggle("Running cues", isOn: Binding(
+                    get: { settings.showsRunning },
+                    set: { v in app.updateStageDisplay { $0.showsRunning = v } }
+                ))
+            }
+            .toggleStyle(.checkbox)
+
+            Text("A performer-facing view — never a cue output. Shows in Show and Rehearsal modes.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

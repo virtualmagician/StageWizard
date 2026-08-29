@@ -19,6 +19,10 @@ final class AppModel {
     /// Web remote HTTP server (phone GO page) — TriggerRouter's third
     /// remote-control client.
     let webRemoteServer = WebRemoteServer()
+    /// Performer-facing confidence-monitor window (D9). Reads transport
+    /// state only — never a cue target, so it isn't wired through
+    /// TriggerRouter or the provider like the surfaces above.
+    let stageDisplayController = StageDisplayController()
 
     struct OperatorWarning: Identifiable {
         let id = UUID()
@@ -89,6 +93,7 @@ final class AppModel {
         if persist, document.show.settings.workspaceMode != newMode {
             document.mutate { $0.settings.workspaceMode = newMode }
         }
+        syncStageDisplay()
     }
 
     /// Preflight on entering Show mode — a quiet banner, not a blocking sheet;
@@ -159,7 +164,10 @@ final class AppModel {
             self.syncMIDIEnabled()
             self.syncOSCEnabled()
             self.syncWebRemoteEnabled()
+            self.syncStageDisplay()
         }
+
+        stageDisplayController.appModel = self
 
         shortcuts.bindingsProvider = { [weak self] in
             self?.document.show.settings.keyBindings ?? [:]
@@ -267,6 +275,9 @@ final class AppModel {
                     self.pushWarning("Cue \(instance.cue.number): one of its displays disconnected — continuing on the rest.")
                 }
             }
+            // The stage display's chosen screen may have just vanished (or
+            // reconfigured) — close it or re-assert its frame.
+            self.syncStageDisplay()
         }
     }
 
@@ -438,6 +449,24 @@ final class AppModel {
         webRemoteServer.stop()
         guard document.show.settings.webRemoteEnabled else { return }
         webRemoteServer.start(port: document.show.settings.webRemotePort)
+    }
+
+    /// Update the stage-display settings AND resync the window immediately —
+    /// the Video Outputs tab calls this for every field (enable, chosen
+    /// display, visible sections) instead of `document.mutate` directly.
+    func updateStageDisplay(_ change: (inout StageDisplaySettings) -> Void) {
+        document.mutate { change(&$0.settings.stageDisplay) }
+        syncStageDisplay()
+    }
+
+    /// Reconcile the stage-display window with what the current show + mode
+    /// + connected displays want. Called on mode changes, document replace,
+    /// settings edits, and display hot-plug/reconfiguration.
+    func syncStageDisplay() {
+        let settings = document.show.settings.stageDisplay
+        let displayConnected = settings.display.flatMap { DisplayManager.shared.match($0) } != nil
+        let active = StageDisplayController.isActive(mode: mode, settings: settings, displayConnected: displayConnected)
+        stageDisplayController.sync(settings: settings, active: active)
     }
 
     /// Push a camera cue's effects to any running instances — segmentation

@@ -40,6 +40,10 @@ public struct ShowSettings: Codable, Hashable, Sendable {
     public var webRemoteEnabled: Bool
     /// TCP port the web remote HTTP server binds to.
     public var webRemotePort: UInt16
+    /// A fullscreen performer-facing confidence monitor on a chosen display —
+    /// clock, show timer, standing-by cue, notes, running cues. Reads
+    /// transport state only; NEVER a cue target.
+    public var stageDisplay: StageDisplaySettings
 
     public init(
         panicDuration: TimeInterval = 3,
@@ -54,7 +58,8 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         oscEnabled: Bool = false,
         oscPort: UInt16 = 53100,
         webRemoteEnabled: Bool = false,
-        webRemotePort: UInt16 = 53200
+        webRemotePort: UInt16 = 53200,
+        stageDisplay: StageDisplaySettings = StageDisplaySettings()
     ) {
         self.panicDuration = panicDuration
         self.doubleGOProtection = doubleGOProtection
@@ -69,12 +74,13 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         self.oscPort = oscPort
         self.webRemoteEnabled = webRemoteEnabled
         self.webRemotePort = webRemotePort
+        self.stageDisplay = stageDisplay
     }
 
     private enum CodingKeys: String, CodingKey {
         case panicDuration, doubleGOProtection, armAheadCount, keyBindings, outputGroups, workspaceMode
         case virtualCameraFeed, midiEnabled, midiBindings, oscEnabled, oscPort
-        case webRemoteEnabled, webRemotePort
+        case webRemoteEnabled, webRemotePort, stageDisplay
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,6 +112,8 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         } else {
             webRemotePort = 53200
         }
+        // Pre-D9 files predate the stage display entirely.
+        stageDisplay = try container.decodeIfPresent(StageDisplaySettings.self, forKey: .stageDisplay) ?? StageDisplaySettings()
     }
 
     public func group(withID id: UUID) -> OutputGroup? {
@@ -118,6 +126,52 @@ public struct ShowSettings: Codable, Hashable, Sendable {
         .previousCue: KeyBinding(keyCode: 126), // Up arrow
         .nextCue: KeyBinding(keyCode: 125),     // Down arrow
     ]
+}
+
+/// A fullscreen performer-facing confidence monitor (clock, show timer,
+/// standing-by cue + notes, running cues) shown on a chosen display while
+/// the workspace is in Show or Rehearsal mode. Reads transport state only —
+/// it is NEVER a cue target, so it uses the same `DisplayFingerprint`
+/// matching mechanism as `OutputGroup.displays` but is otherwise unrelated
+/// to output routing.
+public struct StageDisplaySettings: Codable, Hashable, Sendable {
+    public var enabled: Bool
+    /// The chosen physical display; nil = none picked yet.
+    public var display: DisplayFingerprint?
+    public var showsClock: Bool
+    public var showsShowTimer: Bool
+    public var showsNotes: Bool
+    public var showsRunning: Bool
+
+    public init(
+        enabled: Bool = false,
+        display: DisplayFingerprint? = nil,
+        showsClock: Bool = true,
+        showsShowTimer: Bool = true,
+        showsNotes: Bool = true,
+        showsRunning: Bool = true
+    ) {
+        self.enabled = enabled
+        self.display = display
+        self.showsClock = showsClock
+        self.showsShowTimer = showsShowTimer
+        self.showsNotes = showsNotes
+        self.showsRunning = showsRunning
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, display, showsClock, showsShowTimer, showsNotes, showsRunning
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        display = try container.decodeIfPresent(DisplayFingerprint.self, forKey: .display)
+        showsClock = try container.decodeIfPresent(Bool.self, forKey: .showsClock) ?? true
+        showsShowTimer = try container.decodeIfPresent(Bool.self, forKey: .showsShowTimer) ?? true
+        showsNotes = try container.decodeIfPresent(Bool.self, forKey: .showsNotes) ?? true
+        showsRunning = try container.decodeIfPresent(Bool.self, forKey: .showsRunning) ?? true
+    }
 }
 
 /// Root of the persisted show document.

@@ -101,6 +101,11 @@ public final class TransportController {
         return sequence.first
     }
 
+    /// True once GO has run off the end of the show (see `playheadPastEnd`) —
+    /// distinguishes "past the last cue" from "nothing to stand by" (e.g. an
+    /// empty show) for UI that needs to tell them apart, like the stage display.
+    public var isPlayheadPastEnd: Bool { playheadPastEnd }
+
     public func setPlayhead(_ cueID: UUID?) {
         guard let cueID else {
             playheadID = nil
