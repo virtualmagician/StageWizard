@@ -97,6 +97,9 @@ public struct Cue: Codable, Identifiable, Hashable, Sendable {
     /// nil = top level; otherwise the id of the containing group cue.
     public var parentID: UUID?
     public var hotkey: KeyBinding?
+    /// Seconds since local midnight (0..<86400); nil = no wall-clock trigger.
+    /// See TransportController's 1 Hz wall-clock scheduler.
+    public var wallClock: TimeInterval?
     public var body: CueBody
 
     public init(
@@ -110,6 +113,7 @@ public struct Cue: Codable, Identifiable, Hashable, Sendable {
         follow: FollowAction = .none,
         parentID: UUID? = nil,
         hotkey: KeyBinding? = nil,
+        wallClock: TimeInterval? = nil,
         body: CueBody
     ) {
         self.id = id
@@ -122,6 +126,7 @@ public struct Cue: Codable, Identifiable, Hashable, Sendable {
         self.follow = follow
         self.parentID = parentID
         self.hotkey = hotkey
+        self.wallClock = Cue.normalizedWallClock(wallClock)
         self.body = body
     }
 
@@ -129,5 +134,35 @@ public struct Cue: Codable, Identifiable, Hashable, Sendable {
     public var displayName: String {
         if let name, !name.isEmpty { return name }
         return body.defaultName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, number, name, notes, colorTag, armed, preWait, follow, parentID, hotkey, wallClock, body
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        number = try c.decode(String.self, forKey: .number)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        notes = try c.decode(String.self, forKey: .notes)
+        colorTag = try c.decodeIfPresent(String.self, forKey: .colorTag)
+        armed = try c.decode(Bool.self, forKey: .armed)
+        preWait = try c.decode(TimeInterval.self, forKey: .preWait)
+        follow = try c.decode(FollowAction.self, forKey: .follow)
+        parentID = try c.decodeIfPresent(UUID.self, forKey: .parentID)
+        hotkey = try c.decodeIfPresent(KeyBinding.self, forKey: .hotkey)
+        // Pre-D5 files predate wall-clock triggers.
+        wallClock = Cue.normalizedWallClock(try c.decodeIfPresent(TimeInterval.self, forKey: .wallClock))
+        body = try c.decode(CueBody.self, forKey: .body)
+    }
+
+    /// Wraps (not rejects) an out-of-range time into 0..<86400 seconds —
+    /// same "be liberal in what you accept" spirit as the render-layer clamp.
+    private static func normalizedWallClock(_ raw: TimeInterval?) -> TimeInterval? {
+        guard let raw else { return nil }
+        let day: TimeInterval = 86400
+        let wrapped = raw.truncatingRemainder(dividingBy: day)
+        return wrapped < 0 ? wrapped + day : wrapped
     }
 }

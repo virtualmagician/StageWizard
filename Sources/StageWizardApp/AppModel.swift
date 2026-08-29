@@ -66,6 +66,7 @@ final class AppModel {
         }
         mode = newMode
         showModeEnteredAt = newMode == .show ? Date() : nil
+        transport.wallClockEnabled = (newMode == .show || newMode == .rehearsal)
         if newMode == .rehearsal {
             openRehearsalPreviews()
         }

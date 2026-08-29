@@ -1383,6 +1383,27 @@ private struct TriggersTab: View {
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
+                HStack {
+                    Text("Fire at clock time")
+                    Toggle("", isOn: Binding(
+                        get: { cue.wallClock != nil },
+                        set: { enabled in
+                            document.updateCue(cueID) { cue in
+                                cue.wallClock = enabled ? (cue.wallClock ?? 20 * 3600) : nil
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                    if cue.wallClock != nil {
+                        WallClockField(value: Binding(
+                            get: { document.cue(withID: cueID)?.wallClock ?? 20 * 3600 },
+                            set: { v in document.updateCue(cueID) { $0.wallClock = v } }
+                        ))
+                    }
+                    Text("Fires automatically at this time of day while in Show or Rehearsal mode.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
             .formStyle(.columns)
             .padding(12)
@@ -1424,6 +1445,59 @@ struct TimecodeField: View {
             value = parsed
         }
         text = Timecode.format(value)
+    }
+}
+
+/// HH:MM:SS input for a 24-hour clock time (seconds since local midnight).
+/// TimecodeField's mm:ss.fff format reads badly past an hour, so wall-clock
+/// triggers get their own three-digit-group field instead.
+struct WallClockField: View {
+    @Binding var value: TimeInterval
+    @State private var hh = "00"
+    @State private var mm = "00"
+    @State private var ss = "00"
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            digitField($hh)
+            Text(":").foregroundStyle(.secondary)
+            digitField($mm)
+            Text(":").foregroundStyle(.secondary)
+            digitField($ss)
+        }
+        .onAppear { load() }
+        .onChange(of: value) { _, _ in
+            if !focused { load() }
+        }
+    }
+
+    private func digitField(_ text: Binding<String>) -> some View {
+        TextField("00", text: text)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 30)
+            .multilineTextAlignment(.center)
+            .monospacedDigit()
+            .focused($focused)
+            .onSubmit(commit)
+            .onChange(of: focused) { _, isFocused in
+                if !isFocused { commit() }
+            }
+    }
+
+    private func load() {
+        let seconds = Int(value.rounded(.towardZero))
+        hh = String(format: "%02d", (seconds / 3600) % 24)
+        mm = String(format: "%02d", (seconds / 60) % 60)
+        ss = String(format: "%02d", seconds % 60)
+    }
+
+    private func commit() {
+        let h = min(max(Int(hh) ?? 0, 0), 23)
+        let m = min(max(Int(mm) ?? 0, 0), 59)
+        let s = min(max(Int(ss) ?? 0, 0), 59)
+        value = TimeInterval(h * 3600 + m * 60 + s)
+        load()
     }
 }
 

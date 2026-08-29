@@ -16,6 +16,32 @@ public final class TransportController {
     /// True while a soft panic ramp is in flight (UI shows PANIC state).
     public private(set) var isPanicking = false
 
+    /// Gates the 1 Hz wall-clock scheduler. AppModel sets this true only in
+    /// .show and .rehearsal modes — Edit mode never fires wall-clock cues.
+    public var wallClockEnabled = false {
+        didSet {
+            guard wallClockEnabled != oldValue else { return }
+            if wallClockEnabled {
+                startWallClockTask()
+            } else {
+                stopWallClockTask()
+            }
+        }
+    }
+
+    /// Injectable "seconds since local midnight" clock — overridden in tests
+    /// to drive the scheduler deterministically without real sleeps.
+    public var now: () -> TimeInterval = { TransportController.secondsSinceLocalMidnight(Date()) }
+
+    private var wallClockTask: Task<Void, Never>?
+    /// Seconds-since-midnight as of the previous tick; nil until the first
+    /// tick establishes a baseline (so cues due earlier the same day don't
+    /// all fire the moment wall-clock scheduling is enabled).
+    private var lastWallClockTick: TimeInterval?
+    /// Cues that have already fired today, so a cue fires at most once per
+    /// day even though the tick that covers its target keeps recurring.
+    private var wallClockFiredToday: Set<UUID> = []
+
     public var onOperatorWarning: (@MainActor (String) -> Void)?
     /// Playback-activity signal (document autosave pauses while true).
     public var onPlaybackActivityChanged: (@MainActor (Bool) -> Void)?
@@ -123,6 +149,8 @@ public final class TransportController {
         playheadPastEnd = false
         lastGoAt = nil
         lastPanicAt = nil
+        lastWallClockTick = nil
+        wallClockFiredToday.removeAll()
     }
 
     // MARK: - GO
@@ -374,6 +402,80 @@ public final class TransportController {
             pending.task?.cancel()
         }
         pendingFollows.removeAll()
+    }
+
+    // MARK: - Wall-clock triggers
+
+    private func startWallClockTask() {
+        wallClockTask?.cancel()
+        lastWallClockTick = nil   // re-baseline: no firing on the very first tick
+        wallClockTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.wallClockTick()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func stopWallClockTask() {
+        wallClockTask?.cancel()
+        wallClockTask = nil
+    }
+
+    /// One scheduler tick: fires every armed, wall-clock-tagged cue whose
+    /// target time landed in (previousTick, nowTick] since the last tick —
+    /// at most once per cue per day. Not private so tests can call it
+    /// directly instead of waiting on the real 1 Hz Task loop.
+    func wallClockTick() {
+        let nowTick = now()
+        defer { lastWallClockTick = nowTick }
+        // First tick after enabling: establish a baseline only. Without this
+        // every cue whose time already passed earlier today would fire the
+        // instant wall-clock scheduling turns on.
+        guard let previousTick = lastWallClockTick else { return }
+
+        // Midnight rolled over since the last tick: every cue gets a fresh day.
+        if nowTick < previousTick {
+            wallClockFiredToday.removeAll()
+        }
+        guard !isPanicking else { return }
+
+        let due = Self.dueCues(
+            between: previousTick,
+            and: nowTick,
+            in: show().cues,
+            already: wallClockFiredToday
+        )
+        for cue in due {
+            wallClockFiredToday.insert(cue.id)
+            fire(cueID: cue.id)
+        }
+    }
+
+    /// Pure core of the tick: which armed cues have a `wallClock` target in
+    /// (previousTick, nowTick] and haven't already fired today. Handles the
+    /// midnight wrap (nowTick < previousTick) by treating the window as the
+    /// union of (previousTick, 86400] and [0, nowTick].
+    static func dueCues(
+        between previousTick: TimeInterval,
+        and nowTick: TimeInterval,
+        in cues: [Cue],
+        already fired: Set<UUID>
+    ) -> [Cue] {
+        cues.filter { cue in
+            guard cue.armed, let target = cue.wallClock, !fired.contains(cue.id) else { return false }
+            if previousTick <= nowTick {
+                return target > previousTick && target <= nowTick
+            } else {
+                return target > previousTick || target <= nowTick
+            }
+        }
+    }
+
+    /// Real-world "seconds since local midnight" — the default `now` clock.
+    static func secondsSinceLocalMidnight(_ date: Date) -> TimeInterval {
+        date.timeIntervalSince(Calendar.current.startOfDay(for: date))
     }
 
     // MARK: - Transport verbs

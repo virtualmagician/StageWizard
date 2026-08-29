@@ -242,6 +242,7 @@ struct CueListView: View {
             Text("Pre-Cue").frame(width: 74, alignment: .trailing)
             Text("Duration").frame(width: 80, alignment: .trailing)
             Text("Post-Cue").frame(width: 74, alignment: .trailing)
+            Text("").frame(width: 16)                        // wall-clock badge
             Text("").frame(width: 30)                        // follow badge
         }
         .font(.caption.weight(.semibold))
@@ -293,6 +294,8 @@ struct CueRowView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(width: 74, alignment: .trailing)
+                wallClockBadge(cue.wallClock)
+                    .frame(width: 16)
                 followBadge(cue.follow)
                     .frame(width: 30)
             }
@@ -420,6 +423,23 @@ struct CueRowView: View {
             return Timecode.format(postWait)
         }
         return ""
+    }
+
+    @ViewBuilder
+    private func wallClockBadge(_ wallClock: TimeInterval?) -> some View {
+        if let wallClock {
+            Image(systemName: "clock")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .help("Fires at \(clockTimeLabel(wallClock))")
+        } else {
+            Text("")
+        }
+    }
+
+    private func clockTimeLabel(_ secondsSinceMidnight: TimeInterval) -> String {
+        let total = Int(secondsSinceMidnight.rounded(.towardZero))
+        return String(format: "%02d:%02d:%02d", (total / 3600) % 24, (total / 60) % 60, total % 60)
     }
 
     @ViewBuilder
