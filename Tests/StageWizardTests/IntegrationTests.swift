@@ -6,9 +6,13 @@ import XCTest
 /// Everything runs at -50 dB and (video) in a small corner window.
 @MainActor
 final class IntegrationTests: XCTestCase {
-    static let mediaDir = URL(
-        fileURLWithPath: "/Users/marcotempest/Library/CloudStorage/Dropbox-Newmagic/Marco Tempest/StageWizard/TestMedia"
-    )
+    static let mediaDir: URL = {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // IntegrationTests.swift -> StageWizardTests/
+            .deletingLastPathComponent()   // -> Tests/
+            .deletingLastPathComponent()   // -> repo root
+            .appendingPathComponent("TestMedia")
+    }()
 
     private var show = ShowFile()
     private var transport: TransportController!
