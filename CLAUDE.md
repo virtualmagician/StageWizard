@@ -18,6 +18,9 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - The `.xcodeproj` is GENERATED — edit `project.yml`, never the project.
 - XcodeGen and the gh CLI are vendored in `Tools/` (gitignored; build.sh re-fetches xcodegen).
 - Builds live in `./build` (gitignored + Dropbox-ignored xattr).
+- THIS MACHINE: `xcode-select` points at CommandLineTools (no sudo to fix) —
+  prefix every xcodebuild/xcodegen with
+  `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer &&`.
 
 ## Hard rules
 
@@ -59,7 +62,9 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   `TransportController` (GO/follows/panic), `ActiveCuesRegistry`,
   `MediaPlayback` protocol, `CuePlayerProviding`.
 - `Sources/AudioEngineKit/` — one AVAudioEngine per output device, pooled
-  player nodes, sample-accurate `scheduleSegment` trim, HAL hot-plug.
+  player nodes (each player→varispeed→mixer; the 32 varispeed units attach at
+  buildEngine — mid-show attach/detach stays forbidden), sample-accurate
+  `scheduleSegment` trim, HAL hot-plug.
 - `Sources/VideoEngineKit/` — video + camera + still (slide) players,
   `OutputTarget` (real display | rehearsal preview), `OutputWindowManager`
   (leased windows), `DisplayManager` (fingerprint matching), geometry
@@ -68,13 +73,44 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
 - `Sources/ShortcutKit/` — local keyDown monitor + recorder (Esc = panic,
   hardwired; pass-through while text editing / sheets).
 - `Sources/StageWizardApp/` — SwiftUI UI, `ShowDocumentController` (manual
-  JSON save/open, rotating backups, playback-aware autosave), `AppModel`
-  (composition root, workspace modes), `EngineBridge` (arm resolution).
+  JSON save/open, rotating backups, playback-aware autosave, snapshot undo at
+  the `mutate()` funnel), `AppModel` (composition root, workspace modes),
+  `EngineBridge` (arm resolution), and the remote-control stack:
+  `TriggerRouter` (the ONLY path remote triggers take into perform()/fire —
+  MIDI, OSC, web remote, and gesture GO all end here), `MIDIController`
+  (CoreMIDI + MIDI-Learn), `OSCServer` (UDP, default port 53100),
+  `WebRemoteServer` + `WebRemotePage` (TCP HTTP, default port 53200, embedded
+  phone page), `StageDisplayWindow` (performer confidence monitor, window
+  level screenSaver−1 so real outputs cover it), `PreflightCheck`. Both
+  network ports are per-show settings, off by default, unauthenticated by
+  design (LAN-only; `NSLocalNetworkUsageDescription` lives in project.yml).
 
 ## Semantics pinned by tests (don't "fix" these)
 
 - Stopping a cue (stop cue / Stop All / panic) NEVER fires its auto-follow.
-- Auto-continue anchors to cue START + post-wait; auto-follow to completion.
+- Auto-continue anchors to cue START + post-wait; auto-follow to completion;
+  auto-continue-at-marker anchors to START + preWait + (markerTime − trimIn)
+  ÷ rate. A deleted marker = silent no-arm. Single-cue stop does NOT cancel
+  pending follows (pinned); Stop All / panic does. Format v4 = marker
+  follows (old apps must refuse v4 files cleanly — their FollowAction
+  decoder throws on the unknown mode).
+- Playback rate (0.25×–4×, audio varispeed = tape-style pitch shift):
+  sample/media-time scheduling is untouched; `duration`/`currentTime` and
+  every authored fade-out delay report WALL-CLOCK (media ÷ rate). Varispeed
+  rate resets to 1 on pool checkin.
+- Wall-clock triggers: 1 Hz tick, fires in (prevTick, nowTick] once per cue
+  per day; the FIRST tick after enabling only baselines (times already
+  passed today never backfire); midnight wrap resets the day; panic
+  suppresses; Edit mode never ticks.
+- Undo restore does NOT go through onDocumentReplaced (that would stop
+  playback) — it fires onUndoRestore, transport just revalidates the
+  playhead. rebaseMediaReferences (during save) records nothing.
+- Remote semantics: MIDI noteOn fires, noteOff never, CC only on the
+  transition into ≥64 (held pedal can't machine-gun GO); gesture GO needs a
+  1 s continuous open palm, then a 3 s cooldown demanding a fresh hold, and
+  never fires in Edit mode; the web page carries no panic button (emergency
+  stays physical). Panic is not a ShortcutAction — remotes reach it via
+  TriggerRouter.routePanic() → transport.panic(), same as Esc.
 - GO past the last cue goes dead — no wraparound.
 - Video/camera/image/slide cues REQUIRE an output group (no implicit main-display target).
 - Slides replace each other on the same output; standalone image cues LAYER (like video).
@@ -84,8 +120,10 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   preview resizes re-render; model stays AppKit-free (RGBAColor, plainPreview).
 - Camera effects (CameraEffects on CameraBody, default all-off): passthrough
   preview layer vs processed path (CameraFrameProcessor: data output on its own
-  queue -> Vision segmentation/hand pose -> CoreImage -> CGImage to content
-  layers). Each camera target = container layer (fade/z/transform) holding
+  queue -> mirror -> chroma key (CIColorCube, YCbCr distance, cube rebuilt
+  only on param change) -> Vision segmentation/hand pose -> CoreImage ->
+  CGImage to content layers; chroma-only skips Vision entirely; gesture GO
+  classification is queue-confined and hops value types out). Each camera target = container layer (fade/z/transform) holding
   preview + content + up to 2 hand emitters. Effects swap LIVE (no session
   restart; data connection disabled when idle). Mirroring pushed into the
   capture connection when supported, else flipped in the processor.
@@ -164,10 +202,12 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   (gh at `Tools/gh-cli/bin/gh`, auth via
   `GH_TOKEN=$(printf "protocol=https\nhost=github.com\nusername=virtualmagician\n" | git credential-osxkeychain get | grep '^password=' | cut -d= -f2)`).
 
-## Known v1 limitations (documented, not bugs)
+## Known limitations (documented, not bugs)
 
 Audio exit-loop plays up to one extra queued pass; device unplug stops (not
 migrates) its cues; pause doesn't freeze in-flight fades; follows inside
-groups are ignored (timeline offsets sequence children); no undo (rotating
-`.stagewizard-backups/` next to the show file); prefer ProRes for loop-heavy
-video. `Media/` (real show media) and `TestMedia/` are gitignored.
+groups are ignored (timeline offsets sequence children); undo is
+snapshot-based with a 100-step cap (rotating `.stagewizard-backups/` remain
+the deep-history net); OSC/web remote are unauthenticated by design (off by
+default, trusted show LAN only); prefer ProRes for loop-heavy video.
+`Media/` (real show media) and `TestMedia/` are gitignored.

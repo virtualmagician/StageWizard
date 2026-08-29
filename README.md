@@ -35,10 +35,14 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   10 = front) so video, camera, text, and stills stack predictably.
 - **Live camera effects** — per-cue, toggled live: **person segmentation**
   (the background turns transparent, revealing lower layers behind the
-  performer) and **magic dust** — particle emitters that follow the
-  performer's hands (Vision hand tracking), with six bundled emitter
-  presets, any Particle Designer `.pex` file, and a 0.5–10× particle-size
-  dial. All on-device (Vision + CoreImage), nothing external at showtime.
+  performer), **chroma key** (green-screen keying with color, tolerance,
+  and softness controls — composes with segmentation), and **magic dust** —
+  particle emitters that follow the performer's hands (Vision hand
+  tracking), with six bundled emitter presets, any Particle Designer `.pex`
+  file, and a 0.5–10× particle-size dial. All on-device (Vision +
+  CoreImage), nothing external at showtime. Experimental **gesture GO**:
+  hold an open palm to a running camera cue for one second and GO fires —
+  a performer mid-routine needs no keyboard.
 - **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
   navigable deck: one group named after the file, one cue per slide, GO to
   advance, crossfade between slides, trailing clear cue. Decks are flattened
@@ -46,8 +50,16 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   OOXML-native engine, PowerPoint, Keynote, or LibreOffice — plain PDFs need
   nothing at all), so **nothing external ever runs during a show**.
 - **Sequencing** — pre-wait, auto-continue (anchored to cue start + post-wait),
-  auto-follow (fires on completion), and a playhead that skips past auto
-  chains the way operators expect.
+  auto-follow (fires on completion), **auto-continue at a marker** (drop named
+  markers on the waveform/filmstrip timeline and anchor the next cue to a beat
+  inside the media), and a playhead that skips past auto chains the way
+  operators expect.
+- **Playback rate** — audio and video cues run at 0.25×–4× (tape-style
+  varispeed for audio); durations, fades, and marker follows all track the
+  rate in wall-clock time.
+- **Wall-clock triggers** — any cue can fire itself at a time of day
+  (once per day, in Show or Rehearsal mode): preshow music at 19:30, doors
+  at 19:55, no operator needed.
 - **Groups** — fire-all-at-once, **timeline mode** with a drag-to-arrange
   editor (each child is a bar on a ruler; audio bars show waveforms), or
   **enter-and-play-first**: GO steps the playhead through the group's
@@ -69,14 +81,32 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   the show, and a floating monitor panel shows exactly what the camera
   transmits. In Show mode the whole transport turns red — one glance says
   the workspace is live.
+- **Remote control** — every trigger source funnels through one bus:
+  **MIDI** (any note or CC, assigned by MIDI-Learn, hot-plug aware; a CC
+  fires only on the press, so a held pedal can't machine-gun GO), **OSC**
+  over UDP (`/stagewizard/go`, `/stopall`, `/next`, `/prev`, `/toggle`,
+  `/panic`, `/cue/{number}/fire`), and a **web remote** — the app serves a
+  dark phone page (huge GO, prev/next, double-tap STOP ALL, standing-by cue
+  + notes) at a QR code you scan from the settings panel. All zero-config,
+  zero-dependency, off by default, LAN-only.
+- **Stage display** — a fullscreen performer-facing confidence monitor on
+  any spare display: big clock, show timer, the standing-by cue huge, its
+  notes, and running cues with time remaining. Never a cue target; shows in
+  Show and Rehearsal modes.
+- **Preflight** — one click (and automatically on entering Show mode) checks
+  the whole cue list against the rig: missing media, unassigned or
+  display-less output groups, missing camera permission, disconnected audio
+  devices, un-fed webcam groups, broken cues.
 - **Operator UX** — assignable keyboard shortcuts (stored in the show file)
-  plus per-cue hotkeys, all suppressed while typing; Active Cues panel with
-  live progress and per-instance transport; editable notes next to the GO
+  plus per-cue hotkeys, all suppressed while typing; **undo/redo** for every
+  edit (snapshot-based, coalesced, playback-safe); Active Cues panel with
+  live progress and per-instance transport; a show timer counting up from
+  the moment Show mode starts; editable notes next to the GO
   button; drag media files (or whole decks) straight into the cue list;
   copy/paste/duplicate cues with reference-safe identity remapping; one-click
   renumber (10/20/30…); Open Recent; full-row color tags; collapsible groups;
-  waveform/filmstrip trim editors; media relink/replace on any cue (file
-  dialog or drop onto the inspector); rotating backups and
+  waveform/filmstrip trim editors with a marker lane; media relink/replace on
+  any cue (file dialog or drop onto the inspector); rotating backups and
   playback-aware autosave. Dark show-control look with MagicLab styling.
 - **Show files** — versioned, diff-friendly JSON (`.stagewizard`); media
   referenced relative to the show file so shows survive folder moves; old
@@ -134,10 +164,13 @@ StageWizardApp/  SwiftUI UI, document controller, engine bridge
 
 Cue *definitions* (Codable, in the show file) are strictly separated from
 playback *instances* (runtime state). All orchestration is MainActor; every
-AVFoundation callback hops isolation immediately; the only off-main mutations
-are documented-thread-safe volume setters driven by the fade clock. 119 unit
-and integration tests cover the model, sequencing semantics, the engines,
-deck conversion, and full-stack playback.
+AVFoundation, CoreMIDI, and Network.framework callback hops isolation
+immediately; the only off-main mutations are documented-thread-safe volume
+setters driven by the fade clock. Remote triggers (MIDI, OSC, web remote,
+gesture) all route through a single trigger bus into the same transport the
+keyboard uses. 333 unit and integration tests cover the model, sequencing
+semantics, the engines, the OSC/HTTP parsers, deck conversion, and
+full-stack playback.
 
 ## Prior art & thanks
 
