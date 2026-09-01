@@ -1343,14 +1343,20 @@ final class StageDisplayTests: XCTestCase {
         }
     }
 
-    func testMultiviewLayoutThreeProgramPanesFitATwoByTwoGridWithoutOverlap() {
-        // An odd count (3) leaves one grid cell empty rather than resizing —
-        // still no overlap, still within canvas.
+    func testMultiviewLayoutThreeProgramPanesFormOneBandOfThree() {
+        // Three sources = a single row of three equal tiles (never a 2×2
+        // with an empty hole) — no overlap, within canvas, same y for all.
         let groupIDs = [UUID(), UUID(), UUID()]
         let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: groupIDs)
         XCTAssertEqual(panes.count, 3)
         assertNoOverlaps(panes)
         assertWithinCanvas(panes)
+        let rects = panes.map(\.rect)
+        XCTAssertEqual(rects[0].y, rects[1].y, accuracy: 0.0001, "one row")
+        XCTAssertEqual(rects[1].y, rects[2].y, accuracy: 0.0001, "one row")
+        XCTAssertEqual(rects[0].width, rects[2].width, accuracy: 0.0001, "equal tiles")
+        XCTAssertLessThan(rects[0].x, rects[1].x)
+        XCTAssertLessThan(rects[1].x, rects[2].x)
     }
 
     func testMultiviewLayoutOverflowBeyondSixStacksAtTheLastCellWithIncreasingOffset() {

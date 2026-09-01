@@ -98,7 +98,7 @@ extension StageDisplayPane {
     /// be more surprising than helpful; "Reset Layout" (this file's actual
     /// fix) is the authoritative way to get the full clean grid.
     ///
-    /// Grid shape by count: 1 → 1×1, 2 → 1×2, 3-4 → 2×2, 5-6 → 2×3, capped
+    /// Grid shape by count: 1 → 1×1, 2 → 1×2, 3 → 1×3, 4 → 2×2, 5-6 → 2×3, capped
     /// at 6 cells. `index` beyond the 6th cell (a 7th+ mirrored group) stacks
     /// at the last cell, offset a little further per extra pane — same idea
     /// as the old stagger, just as a fallback for the rare overflow case
@@ -144,7 +144,8 @@ extension StageDisplayPane {
         switch count {
         case ...1: return (1, 1)
         case 2: return (1, 2)
-        case 3, 4: return (2, 2)
+        case 3: return (1, 3)    // a band of three — never a 2×2 with a hole
+        case 4: return (2, 2)
         default: return (2, 3)   // 5...6
         }
     }
