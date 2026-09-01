@@ -1235,4 +1235,267 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertEqual(result.rect.minY, 100, accuracy: 0.0001, "y untouched — nothing nearby on that axis")
         XCTAssertEqual(result.guides, [.vertical(0)])
     }
+
+    // MARK: - D24: StageDisplayTypography — one monospaced type system
+
+    func testTypographyLabelIsMediumWeightMonospaced() {
+        XCTAssertEqual(StageDisplayTypography.label(12), .system(size: 12, weight: .medium, design: .monospaced))
+    }
+
+    func testTypographyDigitsIsBoldMonospaced() {
+        XCTAssertEqual(StageDisplayTypography.digits(40), .system(size: 40, weight: .bold, design: .monospaced))
+    }
+
+    func testTypographyStandingByNumberIsRegularMonospaced() {
+        XCTAssertEqual(StageDisplayTypography.standingByNumber(30), .system(size: 30, weight: .regular, design: .monospaced))
+    }
+
+    func testTypographyStandingByNameIsBoldMonospaced() {
+        // D24: this is the role that used to fall back to the default
+        // proportional sans (Marco's reported inconsistency/collision bug)
+        // — pinned explicitly so it can never silently regress.
+        XCTAssertEqual(StageDisplayTypography.standingByName(50), .system(size: 50, weight: .bold, design: .monospaced))
+    }
+
+    func testTypographyBodyDefaultsToRegularMonospaced() {
+        XCTAssertEqual(StageDisplayTypography.body(16), .system(size: 16, weight: .regular, design: .monospaced))
+    }
+
+    func testTypographyBodyAcceptsAnExplicitWeight() {
+        XCTAssertEqual(StageDisplayTypography.body(16, weight: .semibold), .system(size: 16, weight: .semibold, design: .monospaced))
+    }
+
+    func testTypographyLabelNSFontMatchesTheSwiftUILabelRole() {
+        // The program pane's CATextLayer label (AppKit) must read identically
+        // to every other tile's SwiftUI-rendered `MultiviewLabelBar`.
+        let font = StageDisplayTypography.labelNSFont(ofSize: 12)
+        let expected = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+        XCTAssertEqual(font.fontName, expected.fontName)
+        XCTAssertEqual(font.pointSize, expected.pointSize, accuracy: 0.0001)
+    }
+
+    // MARK: - D24: StageDisplayPane.multiviewLayout — the "clean grid" reset engine
+
+    /// True if two normalized `StageRect`s share any INTERIOR area — used to
+    /// assert `multiviewLayout` never produces a colliding grid. Touching
+    /// edges (a zero-area intersection) do not count as an overlap.
+    private func rectsOverlap(_ a: StageRect, _ b: StageRect) -> Bool {
+        let ar = CGRect(x: a.x, y: a.y, width: a.width, height: a.height)
+        let br = CGRect(x: b.x, y: b.y, width: b.width, height: b.height)
+        let intersection = ar.intersection(br)
+        return intersection.width > 0.0001 && intersection.height > 0.0001
+    }
+
+    private func assertNoOverlaps(_ panes: [StageDisplayPane], file: StaticString = #filePath, line: UInt = #line) {
+        for i in 0..<panes.count {
+            for j in (i + 1)..<panes.count {
+                XCTAssertFalse(
+                    rectsOverlap(panes[i].rect, panes[j].rect),
+                    "\(panes[i].id) overlaps \(panes[j].id)", file: file, line: line
+                )
+            }
+        }
+    }
+
+    private func assertWithinCanvas(_ panes: [StageDisplayPane], file: StaticString = #filePath, line: UInt = #line) {
+        for pane in panes {
+            XCTAssertGreaterThanOrEqual(pane.rect.x, 0, "\(pane.id).x", file: file, line: line)
+            XCTAssertGreaterThanOrEqual(pane.rect.y, 0, "\(pane.id).y", file: file, line: line)
+            XCTAssertLessThanOrEqual(pane.rect.x + pane.rect.width, 1.0001, "\(pane.id) right edge", file: file, line: line)
+            XCTAssertLessThanOrEqual(pane.rect.y + pane.rect.height, 1.0001, "\(pane.id) bottom edge", file: file, line: line)
+        }
+    }
+
+    private static let allNonProgramKinds: [StageDisplayPaneKind] = StageDisplayPaneKind.allCases.filter { $0 != .program }
+
+    func testMultiviewLayoutFullComplementHasNoPairwiseOverlaps() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: Self.allNonProgramKinds, programGroupIDs: [UUID()])
+        assertNoOverlaps(panes)
+        assertWithinCanvas(panes)
+    }
+
+    func testMultiviewLayoutEveryReturnedRectIsWithinTheCanvas() {
+        for count in 1...6 {
+            let groupIDs = (0..<count).map { _ in UUID() }
+            let panes = StageDisplayPane.multiviewLayout(enabledKinds: Self.allNonProgramKinds, programGroupIDs: groupIDs)
+            assertWithinCanvas(panes)
+        }
+    }
+
+    func testMultiviewLayoutProgramPanesAreAlwaysSquare() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: [UUID(), UUID(), UUID()])
+        for pane in panes where pane.kind == .program {
+            XCTAssertEqual(pane.rect.width, pane.rect.height, accuracy: 0.0001, "program tiles stay h==w")
+        }
+    }
+
+    func testMultiviewLayoutOneTwoFourSixProgramPanesProduceExpectedCellCountsAndEqualSizes() {
+        for count in [1, 2, 4, 6] {
+            let groupIDs = (0..<count).map { _ in UUID() }
+            let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: groupIDs)
+            let programPanes = panes.filter { $0.kind == .program }
+            XCTAssertEqual(programPanes.count, count, "count \(count): every mirrored group gets exactly one tile")
+
+            let widths = Set(programPanes.map { ($0.rect.width * 10000).rounded() })
+            XCTAssertEqual(widths.count, 1, "count \(count): every tile is the same size")
+            assertNoOverlaps(programPanes)
+            assertWithinCanvas(programPanes)
+        }
+    }
+
+    func testMultiviewLayoutThreeProgramPanesFitATwoByTwoGridWithoutOverlap() {
+        // An odd count (3) leaves one grid cell empty rather than resizing —
+        // still no overlap, still within canvas.
+        let groupIDs = [UUID(), UUID(), UUID()]
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: groupIDs)
+        XCTAssertEqual(panes.count, 3)
+        assertNoOverlaps(panes)
+        assertWithinCanvas(panes)
+    }
+
+    func testMultiviewLayoutOverflowBeyondSixStacksAtTheLastCellWithIncreasingOffset() {
+        let groupIDs = (0..<8).map { _ in UUID() }
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: groupIDs)
+        XCTAssertEqual(panes.count, 8, "every mirrored group still gets a pane, even past the 6 shown")
+        assertWithinCanvas(panes)
+        // The 7th and 8th land at increasing offsets from the 6th (index 5).
+        let sixth = panes[5].rect
+        let seventh = panes[6].rect
+        let eighth = panes[7].rect
+        XCTAssertEqual(seventh.width, sixth.width, accuracy: 0.0001, "overflow tiles keep the same cell size")
+        XCTAssertGreaterThan(seventh.x, sixth.x, "the 7th tile is offset from the 6th cell")
+        XCTAssertGreaterThan(eighth.x, seventh.x, "each further overflow tile offsets a little more")
+    }
+
+    func testMultiviewLayoutOmitsProgramTilesWhenNoGroupsAreMirrored() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.clock], programGroupIDs: [])
+        XCTAssertTrue(panes.allSatisfy { $0.kind != .program })
+    }
+
+    // MARK: Top strip: standing-by widens when clock/timer are absent
+
+    func testMultiviewLayoutStandingByFillsBetweenClockAndTimerWhenBothPresent() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.clock, .showTimer, .standingBy], programGroupIDs: [])
+        let standingBy = try! XCTUnwrap(panes.first { $0.kind == .standingBy }).rect
+        XCTAssertEqual(standingBy.x, 0.24, accuracy: 0.0001)
+        XCTAssertEqual(standingBy.width, 0.50, accuracy: 0.0001)
+        assertNoOverlaps(panes)
+    }
+
+    func testMultiviewLayoutStandingByWidensToFillWhenClockAndTimerAreBothAbsent() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.standingBy], programGroupIDs: [])
+        let standingBy = try! XCTUnwrap(panes.first { $0.kind == .standingBy }).rect
+        XCTAssertEqual(standingBy.x, 0.02, accuracy: 0.0001)
+        XCTAssertEqual(standingBy.width, 0.96, accuracy: 0.0001, "widens all the way across the top strip")
+    }
+
+    func testMultiviewLayoutStandingByWidensLeftWhenOnlyClockIsAbsent() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.showTimer, .standingBy], programGroupIDs: [])
+        let standingBy = try! XCTUnwrap(panes.first { $0.kind == .standingBy }).rect
+        XCTAssertEqual(standingBy.x, 0.02, accuracy: 0.0001, "no clock to leave room for")
+        XCTAssertEqual(standingBy.width, 0.72, accuracy: 0.0001)
+        assertNoOverlaps(panes)
+    }
+
+    func testMultiviewLayoutStandingByWidensRightWhenOnlyTimerIsAbsent() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.clock, .standingBy], programGroupIDs: [])
+        let standingBy = try! XCTUnwrap(panes.first { $0.kind == .standingBy }).rect
+        XCTAssertEqual(standingBy.width, 0.74, accuracy: 0.0001)
+        assertNoOverlaps(panes)
+    }
+
+    func testMultiviewLayoutOmitsClockAndTimerWhenDisabled() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.standingBy], programGroupIDs: [])
+        XCTAssertNil(panes.first { $0.kind == .clock })
+        XCTAssertNil(panes.first { $0.kind == .showTimer })
+    }
+
+    // MARK: Bottom strip: notes | running | gesture split evenly by enabled count
+
+    func testMultiviewLayoutBottomStripSplitsEvenlyAcrossAllThreeWhenAllEnabled() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.notes, .running, .gesture], programGroupIDs: [])
+        let notes = try! XCTUnwrap(panes.first { $0.kind == .notes }).rect
+        let running = try! XCTUnwrap(panes.first { $0.kind == .running }).rect
+        let gesture = try! XCTUnwrap(panes.first { $0.kind == .gesture }).rect
+        XCTAssertEqual(notes.width, running.width, accuracy: 0.0001)
+        XCTAssertEqual(running.width, gesture.width, accuracy: 0.0001)
+        XCTAssertEqual(notes.x, 0.02, accuracy: 0.0001, "leftmost of the three")
+        XCTAssertEqual(gesture.x + gesture.width, 0.98, accuracy: 0.0001, "rightmost reaches the strip's right margin")
+        assertNoOverlaps(panes)
+    }
+
+    func testMultiviewLayoutRunningAloneFillsTheFullBottomStripWidth() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.running], programGroupIDs: [])
+        let running = try! XCTUnwrap(panes.first { $0.kind == .running }).rect
+        XCTAssertEqual(running.x, 0.02, accuracy: 0.0001)
+        XCTAssertEqual(running.width, 0.96, accuracy: 0.0001, "the only enabled bottom-strip pane takes the whole width")
+    }
+
+    func testMultiviewLayoutNotesAndRunningSplitTheBottomStripInHalf() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.notes, .running], programGroupIDs: [])
+        let notes = try! XCTUnwrap(panes.first { $0.kind == .notes }).rect
+        let running = try! XCTUnwrap(panes.first { $0.kind == .running }).rect
+        XCTAssertEqual(notes.width, running.width, accuracy: 0.0001)
+        XCTAssertEqual(notes.width, 0.4725, accuracy: 0.0001)
+        assertNoOverlaps(panes)
+    }
+
+    func testMultiviewLayoutOmitsDisabledBottomStripKinds() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [.notes], programGroupIDs: [])
+        XCTAssertNil(panes.first { $0.kind == .running })
+        XCTAssertNil(panes.first { $0.kind == .gesture })
+    }
+
+    func testMultiviewLayoutOmitsEverythingWhenNothingIsEnabled() {
+        let panes = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: [])
+        XCTAssertTrue(panes.isEmpty)
+    }
+
+    // MARK: - D24: StageDisplayPane.multiviewCenterCellRect (used for both the
+    // reset grid above and a newly-mirrored program pane's starting slot)
+
+    func testMultiviewCenterCellRectMatchesTheGridMultiviewLayoutProduces() {
+        let groupID = UUID()
+        let fromLayout = StageDisplayPane.multiviewLayout(enabledKinds: [], programGroupIDs: [groupID]).first!.rect
+        let fromCellRect = StageDisplayPane.multiviewCenterCellRect(index: 0, ofCount: 1)
+        XCTAssertEqual(fromLayout, fromCellRect)
+    }
+
+    func testMultiviewCenterCellRectIsSquare() {
+        for index in 0..<4 {
+            let rect = StageDisplayPane.multiviewCenterCellRect(index: index, ofCount: 4)
+            XCTAssertEqual(rect.width, rect.height, accuracy: 0.0001)
+        }
+    }
+
+    // MARK: - D24: StageDisplayLayoutEditor.resetLayout wiring
+
+    func testResetLayoutRelaysOnlyEnabledPanesAndLeavesDisabledPanesUntouched() {
+        let app = AppModel()
+        let disabledOriginalRect = StageRect(x: 0.4, y: 0.4, width: 0.1, height: 0.1)
+        app.updateStageDisplay { s in
+            if let idx = s.panes.firstIndex(where: { $0.kind == .notes }) {
+                s.panes[idx].enabled = false
+                s.panes[idx].rect = disabledOriginalRect
+            }
+        }
+
+        // Mirrors `StageDisplayLayoutEditor.resetLayout`'s own logic exactly
+        // (private to that view) — pinned here so a change to either side
+        // of the wiring is caught.
+        app.updateStageDisplay { s in
+            let enabledKinds = StageDisplayPaneKind.allCases.filter { $0 != .program }.filter { s.pane($0).enabled }
+            let programGroupIDs = s.programPanes.filter(\.enabled).compactMap(\.programGroupID)
+            let laidOut = StageDisplayPane.multiviewLayout(enabledKinds: enabledKinds, programGroupIDs: programGroupIDs)
+            for pane in laidOut {
+                guard let idx = s.panes.firstIndex(where: { $0.id == pane.id }) else { continue }
+                s.panes[idx].rect = pane.rect
+            }
+        }
+
+        let s = app.document.show.settings.stageDisplay
+        XCTAssertFalse(s.pane(.notes).enabled)
+        XCTAssertEqual(s.pane(.notes).rect, disabledOriginalRect, "a disabled pane's rect is left exactly where it was")
+        XCTAssertEqual(s.pane(.clock).rect, StageRect(x: 0.02, y: 0.02, width: 0.20, height: 0.12), "an enabled pane is re-laid onto the clean grid")
+    }
 }

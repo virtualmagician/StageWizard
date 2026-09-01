@@ -17,28 +17,136 @@ extension StageDisplayPaneKind {
 }
 
 extension StageDisplayPane {
-    /// D16: default rect for a NEWLY mirrored group's program pane — the
-    /// base program rect (`defaultRect(for: .program)`), staggered by
-    /// +0.03/+0.03 for each program pane already on the canvas so a second,
-    /// third, etc. group checked in Settings doesn't land exactly on top of
-    /// the one before it. The base program rect already sits close to the
-    /// canvas's right edge, so vertical room governs when the stagger wraps
-    /// back to the base offset (horizontal offset clamps flush against the
-    /// edge once it runs out of room, same as any manual drag would) —
-    /// `StageDisplayPane.clamped` (already applied to every rect) makes that
-    /// clamping safe regardless. Deliberately NOT part of decode/
-    /// `fillingMissing` — this only ever runs when the UI itself creates a
-    /// brand-new pane.
-    static func staggeredProgramRect(existingProgramPaneCount: Int) -> StageRect {
-        let base = defaultRect(for: .program)
+    /// D24: pure geometry for a "clean" multiview grid — replaces the old
+    /// blind-overlap defaults/"Reset Layout" behavior after Marco flagged
+    /// (from screenshots) that resetting produced a messy overlapping
+    /// arrangement instead of something usable. Three fixed bands on the
+    /// 16:9 canvas:
+    ///
+    /// - TOP STRIP (y 0.02, h 0.12): clock (left) — standing-by (center,
+    ///   flexible) — show timer (right). An absent clock/timer lets
+    ///   standing-by widen to fill the space it would have occupied.
+    /// - CENTER REGION (y 0.16...0.66): every program pane, tiled
+    ///   edge-to-edge in a grid sized for the count (1 / 1×2 / 2×2 / 2×3 for
+    ///   1 / 2 / 3-4 / 5-6 panes), h==w per tile (the program h==w lock),
+    ///   the whole grid block centered horizontally. Capped at 6 shown —
+    ///   see `multiviewCenterCellRect`'s doc for what happens beyond that.
+    /// - BOTTOM STRIP (y 0.70, h 0.28): notes | running | gesture, in that
+    ///   order, ENABLED ones only, splitting the width evenly.
+    ///
+    /// Lays out ONLY the panes described by `enabledKinds` (never
+    /// `.program` — program panes are described separately by
+    /// `programGroupIDs`, one entry per currently-mirrored group) and
+    /// `programGroupIDs`. Callers (`StageDisplayLayoutEditor.resetLayout`,
+    /// the authoritative use) are responsible for leaving every OTHER
+    /// (disabled) pane's rect untouched — this function has no notion of
+    /// "disabled", it only ever produces rects for what it's told is
+    /// enabled. Every returned rect is already `clamped` — safe to write
+    /// straight onto a `StageDisplayPane.rect` with no second clamp pass.
+    static func multiviewLayout(enabledKinds: [StageDisplayPaneKind], programGroupIDs: [UUID]) -> [StageDisplayPane] {
+        let enabled = Set(enabledKinds)
+        var result: [StageDisplayPane] = []
+
+        // Top strip.
+        let topY = 0.02, topHeight = 0.12
+        let hasClock = enabled.contains(.clock)
+        let hasTimer = enabled.contains(.showTimer)
+        if hasClock {
+            result.append(laidOutPane(.clock, StageRect(x: 0.02, y: topY, width: 0.20, height: topHeight)))
+        }
+        if hasTimer {
+            result.append(laidOutPane(.showTimer, StageRect(x: 0.78, y: topY, width: 0.20, height: topHeight)))
+        }
+        if enabled.contains(.standingBy) {
+            let left = hasClock ? 0.24 : 0.02
+            let right = hasTimer ? 0.74 : 0.98
+            result.append(laidOutPane(.standingBy, StageRect(x: left, y: topY, width: max(0, right - left), height: topHeight)))
+        }
+
+        // Center region: one program tile per mirrored group.
+        for (index, groupID) in programGroupIDs.enumerated() {
+            let rect = multiviewCenterCellRect(index: index, ofCount: programGroupIDs.count)
+            result.append(StageDisplayPane(kind: .program, enabled: true, rect: rect, programGroupID: groupID))
+        }
+
+        // Bottom strip: notes | running | gesture, enabled-only, even split.
+        let bottomKinds: [StageDisplayPaneKind] = [.notes, .running, .gesture].filter(enabled.contains)
+        if !bottomKinds.isEmpty {
+            let y = 0.70, height = 0.28, gutter = 0.015, margin = 0.02
+            let available = 1 - margin * 2
+            let cellWidth = (available - gutter * Double(bottomKinds.count - 1)) / Double(bottomKinds.count)
+            for (index, kind) in bottomKinds.enumerated() {
+                let x = margin + Double(index) * (cellWidth + gutter)
+                result.append(laidOutPane(kind, StageRect(x: x, y: y, width: cellWidth, height: height)))
+            }
+        }
+
+        return result
+    }
+
+    private static func laidOutPane(_ kind: StageDisplayPaneKind, _ rect: StageRect) -> StageDisplayPane {
+        StageDisplayPane(kind: kind, enabled: true, rect: rect)
+    }
+
+    /// D24: the geometry of ONE cell in the multiview center-region program
+    /// grid sized for `count` total tiles — factored out of
+    /// `multiviewLayout` so `SettingsPanelView.setGroupMirrored` can give a
+    /// newly-mirrored group's pane the slot it would occupy in a freshly
+    /// reset layout (a closer first guess than the old diagonal stagger)
+    /// WITHOUT moving any already-placed program pane — moving panes the
+    /// operator already positioned as a side effect of checking a box would
+    /// be more surprising than helpful; "Reset Layout" (this file's actual
+    /// fix) is the authoritative way to get the full clean grid.
+    ///
+    /// Grid shape by count: 1 → 1×1, 2 → 1×2, 3-4 → 2×2, 5-6 → 2×3, capped
+    /// at 6 cells. `index` beyond the 6th cell (a 7th+ mirrored group) stacks
+    /// at the last cell, offset a little further per extra pane — same idea
+    /// as the old stagger, just as a fallback for the rare overflow case
+    /// rather than the common one.
+    static func multiviewCenterCellRect(index: Int, ofCount count: Int) -> StageRect {
+        guard count > 0 else { return defaultRect(for: .program) }
+        let shownCount = min(count, 6)
+        let (rows, cols) = centerGridDimensions(forCount: shownCount)
+
+        let regionY = 0.16, regionHeight = 0.50
+        let margin = 0.02, gutter = 0.015
+        let availableWidth = 1 - margin * 2
+        let cellFromWidth = (availableWidth - gutter * Double(cols - 1)) / Double(cols)
+        let cellFromHeight = (regionHeight - gutter * Double(rows - 1)) / Double(rows)
+        let cell = min(cellFromWidth, cellFromHeight)
+
+        let blockWidth = Double(cols) * cell + gutter * Double(cols - 1)
+        let blockHeight = Double(rows) * cell + gutter * Double(rows - 1)
+        let blockX = (1 - blockWidth) / 2
+        let blockY = regionY + (regionHeight - blockHeight) / 2
+
+        let shownIndex = min(index, shownCount - 1)
+        let row = shownIndex / cols
+        let col = shownIndex % cols
+        let baseX = blockX + Double(col) * (cell + gutter)
+        let baseY = blockY + Double(row) * (cell + gutter)
+
+        // Overflow beyond the 6 shown cells: stack at the last cell, offset
+        // a little further per extra pane so each is at least individually
+        // reachable in the editor rather than perfectly hidden underneath
+        // one another.
+        let overflowSteps = max(0, index - (shownCount - 1))
         let step = 0.03
-        let maxSteps = max(1, Int(((1 - base.y - base.height) / step).rounded(.down)) + 1)
-        let stepIndex = existingProgramPaneCount % maxSteps
-        let offset = step * Double(stepIndex)
-        var rect = base
-        rect.x = base.x + offset
-        rect.y = base.y + offset
+        let rect = StageRect(
+            x: baseX + step * Double(overflowSteps),
+            y: baseY + step * Double(overflowSteps),
+            width: cell, height: cell
+        )
         return clamped(rect, lockToSquare: true)
+    }
+
+    private static func centerGridDimensions(forCount count: Int) -> (rows: Int, cols: Int) {
+        switch count {
+        case ...1: return (1, 1)
+        case 2: return (1, 2)
+        case 3, 4: return (2, 2)
+        default: return (2, 3)   // 5...6
+        }
     }
 }
 
@@ -149,11 +257,25 @@ struct StageDisplayLayoutEditor: View {
         }
     }
 
+    /// D24: rebuilds a clean, non-overlapping multiview grid from the
+    /// CURRENTLY enabled panes + mirrored program groups
+    /// (`StageDisplayPane.multiviewLayout`) — replaces the old behavior of
+    /// resetting every pane (enabled or not) to its lone `defaultRect`,
+    /// which is exactly what produced the messy overlapping arrangement
+    /// Marco flagged from screenshots (multiple default rects were never
+    /// designed to coexist as a set — they were per-kind starting points
+    /// for a single pane each, not a coordinated layout). A DISABLED pane's
+    /// rect is left exactly where it was — only enabled panes are re-laid.
     private func resetLayout() {
         app.updateStageDisplay { s in
-            for idx in s.panes.indices {
-                let defaultRect = StageDisplayPane.defaultRect(for: s.panes[idx].kind)
-                s.panes[idx].rect = defaultRect
+            let enabledKinds = StageDisplayPaneKind.allCases
+                .filter { $0 != .program }
+                .filter { s.pane($0).enabled }
+            let programGroupIDs = s.programPanes.filter(\.enabled).compactMap(\.programGroupID)
+            let laidOut = StageDisplayPane.multiviewLayout(enabledKinds: enabledKinds, programGroupIDs: programGroupIDs)
+            for pane in laidOut {
+                guard let idx = s.panes.firstIndex(where: { $0.id == pane.id }) else { continue }
+                s.panes[idx].rect = pane.rect
             }
         }
     }

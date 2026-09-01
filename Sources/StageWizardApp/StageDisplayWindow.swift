@@ -584,7 +584,10 @@ final class StageDisplayController {
         labelText.alignmentMode = .center
         labelText.truncationMode = .end
         labelText.foregroundColor = StageDisplayChrome.labelTextCG
-        labelText.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        // D24: same medium-weight monospaced family as every SwiftUI tile's
+        // `MultiviewLabelBar` (`StageDisplayTypography.label`) — this is
+        // the AppKit twin, see `StageDisplayTypography.labelNSFont`'s doc.
+        labelText.font = StageDisplayTypography.labelNSFont(ofSize: 12)
         labelText.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         labelBackground.addSublayer(labelText)
 
@@ -890,10 +893,10 @@ struct StageDisplayContentView: View {
     // MARK: Clock
 
     private func clockPane(size: CGSize) -> some View {
-        MultiviewTile(label: "CLOCK", size: size) {
+        MultiviewTile(label: "CLOCK", size: size) { contentSize in
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(StageDisplayFormat.wallClock(context.date))
-                    .font(.system(size: size.height * 0.6, weight: .heavy, design: .monospaced))
+                    .font(StageDisplayTypography.digits(contentSize.height * 0.6))
                     .monospacedDigit()
                     .minimumScaleFactor(0.3)
                     .lineLimit(1)
@@ -905,11 +908,11 @@ struct StageDisplayContentView: View {
     // MARK: Show timer
 
     private func showTimerPane(size: CGSize) -> some View {
-        MultiviewTile(label: "SHOW TIMER", size: size) {
+        MultiviewTile(label: "SHOW TIMER", size: size) { contentSize in
             if let startedAt = app.showModeEnteredAt {
                 TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(StageDisplayFormat.elapsed(from: startedAt, to: context.date))
-                        .font(.system(size: size.height * 0.55, weight: .heavy, design: .monospaced))
+                        .font(StageDisplayTypography.digits(contentSize.height * 0.55))
                         .monospacedDigit()
                         .minimumScaleFactor(0.3)
                         .lineLimit(1)
@@ -923,21 +926,29 @@ struct StageDisplayContentView: View {
 
     private func standingByPane(size: CGSize) -> some View {
         let tally = StageDisplayTally.standingBy(hasStandingByCue: app.transport.standingByCue != nil)
-        return MultiviewTile(label: "STANDING BY", tally: tally, size: size) {
-            VStack(spacing: size.height * 0.04) {
+        return MultiviewTile(label: "STANDING BY", tally: tally, size: size) { contentSize in
+            VStack(spacing: contentSize.height * 0.04) {
                 if let cue = app.transport.standingByCue {
                     // D20: the cue number moves LEFT of the name on the same
                     // baseline row, and grows to roughly half the name's size
                     // (was a small caption-sized line above it) — everything
                     // about how the NAME itself is sized (`minimumScaleFactor`,
                     // `lineLimit`, alignment) is unchanged.
-                    HStack(alignment: .firstTextBaseline, spacing: size.width * 0.03) {
+                    HStack(alignment: .firstTextBaseline, spacing: contentSize.width * 0.03) {
                         Text(cue.number)
-                            .font(.system(size: size.height * 0.25, weight: .semibold, design: .monospaced))
+                            .font(StageDisplayTypography.standingByNumber(contentSize.height * 0.25))
                             .foregroundStyle(.gray)
                             .lineLimit(1)
+                        // D24: this was the one Text in the whole stage
+                        // display still using the default proportional sans
+                        // — every neighboring label/digit was already
+                        // monospaced, so it read as visually inconsistent
+                        // AND (being a taller, heavier face) was more likely
+                        // to run into the tile's own label strip below it.
+                        // `MultiviewTile`'s content inset (same D24 pass)
+                        // fixes the collision itself; this fixes the font.
                         Text(cue.displayName)
-                            .font(.system(size: size.height * 0.5, weight: .bold))
+                            .font(StageDisplayTypography.standingByName(contentSize.height * 0.5))
                             .minimumScaleFactor(0.15)
                             .lineLimit(2)
                             .multilineTextAlignment(.center)
@@ -945,11 +956,11 @@ struct StageDisplayContentView: View {
                     }
                 } else if app.transport.isPlayheadPastEnd {
                     Text("END OF SHOW")
-                        .font(.system(size: size.height * 0.22, weight: .bold))
+                        .font(StageDisplayTypography.body(contentSize.height * 0.22, weight: .bold))
                         .foregroundStyle(.gray)
                 } else {
                     Text("—")
-                        .font(.system(size: size.height * 0.3, weight: .bold))
+                        .font(StageDisplayTypography.body(contentSize.height * 0.3, weight: .bold))
                         .foregroundStyle(.gray)
                 }
             }
@@ -960,15 +971,15 @@ struct StageDisplayContentView: View {
 
     private func notesPane(size: CGSize) -> some View {
         let notes = app.transport.standingByCue.flatMap { document.cue(withID: $0.id)?.notes } ?? ""
-        return MultiviewTile(label: "NOTES", size: size) {
+        return MultiviewTile(label: "NOTES", size: size) { contentSize in
             if !notes.isEmpty {
                 Text(notes)
-                    .font(.system(size: size.height * 0.3))
+                    .font(StageDisplayTypography.body(contentSize.height * 0.3))
                     .minimumScaleFactor(0.4)
                     .lineLimit(4)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.gray)
-                    .padding(.horizontal, size.width * 0.05)
+                    .padding(.horizontal, contentSize.width * 0.05)
             }
         }
     }
@@ -976,20 +987,20 @@ struct StageDisplayContentView: View {
     // MARK: Running cues
 
     private func runningPane(size: CGSize) -> some View {
-        MultiviewTile(label: "RUNNING", size: size) {
+        MultiviewTile(label: "RUNNING", size: size) { contentSize in
             if !app.transport.registry.isEmpty {
                 TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                    VStack(alignment: .leading, spacing: size.height * 0.04) {
+                    VStack(alignment: .leading, spacing: contentSize.height * 0.04) {
                         ForEach(app.transport.registry.instances) { instance in
                             StageDisplayRunningRow(
                                 instance: instance,
-                                rowFontSize: size.height * 0.14,
+                                rowFontSize: contentSize.height * 0.14,
                                 now: context.date
                             )
                         }
                     }
-                    .padding(size.width * 0.04)
-                    .frame(width: size.width, height: size.height, alignment: .topLeading)
+                    .padding(contentSize.width * 0.04)
+                    .frame(width: contentSize.width, height: contentSize.height, alignment: .topLeading)
                 }
             }
         }
@@ -1032,7 +1043,7 @@ struct StageDisplayContentView: View {
                 StageDisplayChrome.tileBackground
                 if !hasContent {
                     Text("NO SOURCE")
-                        .font(.system(size: size.height * 0.14, weight: .semibold, design: .monospaced))
+                        .font(StageDisplayTypography.body(size.height * 0.14, weight: .semibold))
                         .tracking(2)
                         .lineLimit(1)
                         .minimumScaleFactor(0.4)
@@ -1051,14 +1062,14 @@ struct StageDisplayContentView: View {
     /// this pane reads it directly (like `standingByPane`/`notesPane`)
     /// rather than driving its own `TimelineView` tick.
     private func gesturePane(size: CGSize) -> some View {
-        MultiviewTile(label: "GESTURE", size: size) {
+        MultiviewTile(label: "GESTURE", size: size) { contentSize in
             if let readout = app.gestureReadout {
-                VStack(alignment: .leading, spacing: size.height * 0.06) {
-                    HStack(spacing: size.width * 0.05) {
+                VStack(alignment: .leading, spacing: contentSize.height * 0.06) {
+                    HStack(spacing: contentSize.width * 0.05) {
                         Image(systemName: readout.goGesture.symbolName)
-                            .font(.system(size: size.height * 0.30, weight: .semibold))
+                            .font(.system(size: contentSize.height * 0.30, weight: .semibold))
                         Text(readout.goGesture.label.uppercased())
-                            .font(.system(size: size.height * 0.13, weight: .semibold, design: .monospaced))
+                            .font(StageDisplayTypography.body(contentSize.height * 0.13, weight: .semibold))
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
                         Spacer(minLength: 0)
@@ -1071,25 +1082,25 @@ struct StageDisplayContentView: View {
                                 .frame(width: barGeo.size.width * readout.holdProgress)
                         }
                     }
-                    .frame(height: max(3, size.height * 0.09))
+                    .frame(height: max(3, contentSize.height * 0.09))
                     .clipShape(Capsule())
-                    HStack(spacing: size.width * 0.05) {
+                    HStack(spacing: contentSize.width * 0.05) {
                         if readout.cooldownRemaining > 0 {
                             Text(String(format: "COOLDOWN %.1f s", readout.cooldownRemaining))
-                                .font(.system(size: size.height * 0.11, design: .monospaced))
+                                .font(StageDisplayTypography.body(contentSize.height * 0.11))
                                 .foregroundStyle(.gray)
                         }
                         let others = readout.detected.filter { $0 != readout.goGesture }
                         ForEach(others, id: \.self) { gesture in
                             Image(systemName: gesture.symbolName)
-                                .font(.system(size: size.height * 0.13))
+                                .font(.system(size: contentSize.height * 0.13))
                                 .foregroundStyle(.gray)
                         }
                     }
                 }
                 .foregroundStyle(.white)
-                .padding(size.width * 0.05)
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
+                .padding(contentSize.width * 0.05)
+                .frame(width: contentSize.width, height: contentSize.height, alignment: .topLeading)
             }
         }
     }
@@ -1146,13 +1157,13 @@ private struct StageDisplayRunningRow: View {
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text(instance.cue.number)
-                    .font(.system(size: rowFontSize, weight: .bold, design: .monospaced))
+                    .font(StageDisplayTypography.digits(rowFontSize))
                 Text(instance.cue.displayName)
-                    .font(.system(size: rowFontSize))
+                    .font(StageDisplayTypography.body(rowFontSize))
                     .lineLimit(1)
                 Spacer()
                 Text(StageDisplayFormat.remaining(duration: duration, elapsed: elapsed, infiniteLoop: infinite))
-                    .font(.system(size: rowFontSize, weight: .semibold, design: .monospaced))
+                    .font(StageDisplayTypography.body(rowFontSize, weight: .semibold))
                     .monospacedDigit()
             }
             .foregroundStyle(.white)

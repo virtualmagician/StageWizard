@@ -1,3 +1,4 @@
+import AppKit
 import QuartzCore
 import SwiftUI
 
@@ -35,6 +36,63 @@ enum StageDisplayChrome {
     static let neutralBorderCG = CGColor(gray: 0.23, alpha: 1)
     static let labelBackgroundCG = CGColor(gray: 0, alpha: 0.85)
     static let labelTextCG = CGColor(gray: 1, alpha: 1)
+}
+
+/// D24: the ONE typography system every stage-display pane draws from —
+/// system MONOSPACED throughout, no exceptions. Before this, the
+/// standing-by pane's cue NAME (and a few other labels) fell back to the
+/// default proportional sans while every digit/label around them was
+/// already monospaced — Marco flagged it directly from screenshots as
+/// visually inconsistent, and the mismatch is also what let that name run
+/// long enough to collide with the tile's own "STANDING BY" label strip
+/// (see `MultiviewTile`'s content-inset fix, same D24 pass). Every role
+/// here fixes the WEIGHT and FAMILY only; every call site still supplies
+/// its own size, proportional to its pane's rect exactly as before.
+///
+/// `labelNSFont(ofSize:)` is the AppKit twin, for the one piece of stage-
+/// display text that isn't SwiftUI: a program pane's live tally label is a
+/// raw `CATextLayer` painted above the mirrored content
+/// (`StageDisplayController.ProgramOverlay`, see `StageDisplayWindow.swift`)
+/// — it must match `label(_:)` exactly so a program tile's label reads
+/// identically to every other tile's.
+enum StageDisplayTypography {
+    /// Tile label strips (`MultiviewLabelBar`) — medium weight; tracking
+    /// and uppercasing are applied by the caller, unchanged from D23.
+    static func label(_ size: CGFloat) -> Font {
+        .system(size: size, weight: .medium, design: .monospaced)
+    }
+
+    /// Clock / show-timer digits — bold, tabular. `design: .monospaced`
+    /// already gives tabular figures; callers additionally apply
+    /// `.monospacedDigit()`, belt-and-suspenders.
+    static func digits(_ size: CGFloat) -> Font {
+        .system(size: size, weight: .bold, design: .monospaced)
+    }
+
+    /// The standing-by pane's cue NUMBER — regular weight, secondary (the
+    /// caller applies the muted color).
+    static func standingByNumber(_ size: CGFloat) -> Font {
+        .system(size: size, weight: .regular, design: .monospaced)
+    }
+
+    /// The standing-by pane's cue NAME — bold, monospaced. This is the
+    /// exact role that used to fall back to the default proportional sans.
+    static func standingByName(_ size: CGFloat) -> Font {
+        .system(size: size, weight: .bold, design: .monospaced)
+    }
+
+    /// Everything else on the display — notes, running-row names,
+    /// placeholders, secondary readouts — monospaced, regular weight
+    /// unless the caller asks for more emphasis.
+    static func body(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
+    }
+
+    /// AppKit twin of `label(_:)` for the program pane's `CATextLayer`
+    /// group-name label.
+    static func labelNSFont(ofSize size: CGFloat) -> NSFont {
+        .monospacedSystemFont(ofSize: size, weight: .medium)
+    }
 }
 
 /// D23: which "tally" a stage-display pane currently shows — mirrors a
@@ -102,7 +160,7 @@ struct MultiviewLabelBar: View {
 
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
+            .font(StageDisplayTypography.label(fontSize))
             .tracking(1.5)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
@@ -119,26 +177,45 @@ struct MultiviewLabelBar: View {
 /// stage-display pane (everything except a program pane's LIVE mirrored
 /// content, which lives in a raw CALayer outside this view's own tree —
 /// see `StageDisplayChrome`'s type doc).
+///
+/// D24: the content closure receives the INSET content size — the full
+/// tile size minus the label strip's own height plus a small gap — instead
+/// of the raw tile size every pane used to size itself against. Before
+/// this, a pane's content was simply centered over the FULL tile (the
+/// label bar painted on top via `.overlay`), so anything tall enough (the
+/// standing-by pane's cue name wrapping to two lines was the reported
+/// case) rendered UNDER the label strip instead of stopping short of it.
+/// Every pane now lays out inside `contentSize` instead of the `size` this
+/// tile itself was given, so the fix applies generally — every pane, every
+/// size — rather than pane-by-pane.
 struct MultiviewTile<Content: View>: View {
     let label: String
     let tally: StageDisplayTally
     let size: CGSize
-    let content: Content
+    let content: (CGSize) -> Content
 
-    init(label: String, tally: StageDisplayTally = .neutral, size: CGSize, @ViewBuilder content: () -> Content) {
+    init(label: String, tally: StageDisplayTally = .neutral, size: CGSize, @ViewBuilder content: @escaping (CGSize) -> Content) {
         self.label = label
         self.tally = tally
         self.size = size
-        self.content = content()
+        self.content = content
     }
 
     private var barHeight: CGFloat { max(14, size.height * 0.09) }
     private var fontSize: CGFloat { max(9, min(13, barHeight * 0.5)) }
+    /// A small breathing gap between the content area and the label strip,
+    /// on top of the strip's own height — keeps content from ever rendering
+    /// flush against the label text, not just short of overlapping it.
+    private var contentGap: CGFloat { max(2, size.height * 0.02) }
+    private var contentSize: CGSize {
+        CGSize(width: size.width, height: max(0, size.height - barHeight - contentGap))
+    }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             StageDisplayChrome.tileBackground
-            content
+            content(contentSize)
+                .frame(width: contentSize.width, height: contentSize.height)
         }
         .frame(width: size.width, height: size.height)
         .overlay(alignment: .bottom) {

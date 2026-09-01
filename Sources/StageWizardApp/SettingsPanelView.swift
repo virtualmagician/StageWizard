@@ -261,15 +261,21 @@ private struct OutputGroupsTab: View {
     }
 
     /// D16: check a group's "Mirror on stage display" box to append a new
-    /// `.program` pane for it (staggered so it doesn't land exactly on top
-    /// of any pane already there); uncheck to remove that pane entirely —
+    /// `.program` pane for it; uncheck to remove that pane entirely —
     /// unlike every other pane kind, a program pane's existence in `panes`
     /// IS the mirroring decision, so there's nothing left to disable-but-keep.
+    /// D24: the new pane's starting rect is the slot it would occupy in a
+    /// freshly RESET multiview grid for the resulting count
+    /// (`StageDisplayPane.multiviewCenterCellRect`) — a closer first guess
+    /// than the old diagonal stagger, without moving any program pane
+    /// already on the canvas (see that function's doc comment for why).
     private func setGroupMirrored(_ groupID: UUID, _ isOn: Bool) {
         app.updateStageDisplay { s in
             if isOn {
                 guard s.programPane(forGroup: groupID) == nil else { return }
-                let rect = StageDisplayPane.staggeredProgramRect(existingProgramPaneCount: s.programPanes.count)
+                let rect = StageDisplayPane.multiviewCenterCellRect(
+                    index: s.programPanes.count, ofCount: s.programPanes.count + 1
+                )
                 s.panes.append(StageDisplayPane(kind: .program, enabled: true, rect: rect, programGroupID: groupID))
             } else {
                 s.panes.removeAll { $0.kind == .program && $0.programGroupID == groupID }
