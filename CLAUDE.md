@@ -111,8 +111,10 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   D22: /status/running also re-sends unconditionally every ~2 Hz (tick %
   20) as a liveness heartbeat, suppressed on ticks that already sent a
   genuine change. D22: /stagewizard/cuelist/begin|item|end dumps the GO
-  sequence (number, name), capped at 64, on subscribe (after the status
-  messages) and whenever it changes.
+  sequence, capped at 64, on subscribe (after the status messages) and
+  whenever it changes; item args are (i index, s number, s name,
+  s colorTag — verbatim, empty when untagged, OPTIONAL trailing arg old
+  wands ignore; a tag change re-bursts).
 
 ## Semantics pinned by tests (don't "fix" these)
 

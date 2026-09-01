@@ -37,6 +37,12 @@ enum OSCStatusFeedback {
     struct CueListEntry: Equatable {
         var number: String
         var name: String
+        /// The cue's color tag id verbatim (red/crimson/…, legacy ids as
+        /// stored), empty when untagged — rides the item message as an
+        /// OPTIONAL trailing arg (wands parse positionally; old wands
+        /// ignore it). Part of the Equatable identity on purpose: a tag
+        /// change re-bursts the list, same as a rename.
+        var colorTag: String = ""
     }
 
     /// Neighbors of the standing-by cue within the GO sequence — pure helper
@@ -169,13 +175,15 @@ enum OSCStatusFeedback {
     /// so it's testable without a real TransportController (mirrors
     /// `windowInfo` above). Name matches `windowInfo`'s: `displayName`.
     static func cuelistEntries(goSequence: [Cue]) -> [CueListEntry] {
-        goSequence.prefix(maxCuelistEntries).map { CueListEntry(number: $0.number, name: $0.displayName) }
+        goSequence.prefix(maxCuelistEntries).map {
+            CueListEntry(number: $0.number, name: $0.displayName, colorTag: $0.colorTag ?? "")
+        }
     }
 
     /// The `/stagewizard/cuelist/begin|item|end` burst for `entries`: one
-    /// `begin` (count), one `item` per entry (0-based index, number, name),
-    /// one `end` (same count) — each its own message/datagram, in this
-    /// order. Caps to `maxCuelistEntries` defensively even if `entries`
+    /// `begin` (count), one `item` per entry (0-based index, number, name,
+    /// optional color tag — empty when untagged), one `end` (same count) —
+    /// each its own message/datagram, in this order. Caps to `maxCuelistEntries` defensively even if `entries`
     /// arrives larger than that (e.g. called directly, bypassing
     /// `cuelistEntries`'s own cap), so `count` always matches the number of
     /// `item` messages actually produced — the wand's begin→end
@@ -188,6 +196,10 @@ enum OSCStatusFeedback {
         for (index, entry) in capped.enumerated() {
             messages.append(OSCMessage(address: "/stagewizard/cuelist/item", arguments: [
                 .int32(Int32(index)), .string(entry.number), .string(entry.name),
+                // Optional trailing arg (StageWand ask, 2026-09-01): the
+                // cue's color tag verbatim, empty when untagged. Wands parse
+                // positionally — old firmware just ignores the 4th arg.
+                .string(entry.colorTag),
             ]))
         }
         messages.append(OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(Int32(capped.count))]))

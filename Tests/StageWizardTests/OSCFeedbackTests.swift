@@ -257,11 +257,41 @@ final class OSCFeedbackTests: XCTestCase {
         let messages = OSCStatusFeedback.cuelistMessages(entries)
         XCTAssertEqual(messages, [
             OSCMessage(address: "/stagewizard/cuelist/begin", arguments: [.int32(3)]),
-            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(0), .string("1"), .string("Blackout")]),
-            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(1), .string("2"), .string("Fade up")]),
-            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(2), .string("3"), .string("Rain")]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(0), .string("1"), .string("Blackout"), .string("")]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(1), .string("2"), .string("Fade up"), .string("")]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(2), .string("3"), .string("Rain"), .string("")]),
             OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(3)]),
         ])
+    }
+
+    func testCuelistItemCarriesTheColorTagAsOptionalTrailingArg() {
+        // StageWand ask (2026-09-01): tag verbatim, empty when untagged —
+        // wands parse positionally, old firmware ignores the 4th arg.
+        let entries = [
+            OSCStatusFeedback.CueListEntry(number: "10", name: "Opening", colorTag: "crimson"),
+            OSCStatusFeedback.CueListEntry(number: "20", name: "Drones"),
+        ]
+        let messages = OSCStatusFeedback.cuelistMessages(entries)
+        XCTAssertEqual(messages[1].arguments, [.int32(0), .string("10"), .string("Opening"), .string("crimson")])
+        XCTAssertEqual(messages[2].arguments, [.int32(1), .string("20"), .string("Drones"), .string("")])
+    }
+
+    func testCuelistEntriesCarryTheCueColorTag() {
+        var tagged = Cue(number: "1", body: .stop(StopBody()))
+        tagged.colorTag = "sky"
+        let untagged = Cue(number: "2", body: .stop(StopBody()))
+        let entries = OSCStatusFeedback.cuelistEntries(goSequence: [tagged, untagged])
+        XCTAssertEqual(entries.map(\.colorTag), ["sky", ""])
+    }
+
+    func testColorTagChangeAloneTriggersACuelistReburst() {
+        var old = snapshot()
+        old.cuelist = [OSCStatusFeedback.CueListEntry(number: "1", name: "Same")]
+        var new = old
+        new.cuelist = [OSCStatusFeedback.CueListEntry(number: "1", name: "Same", colorTag: "navy")]
+        let messages = OSCStatusFeedback.changedMessages(old: old, new: new)
+        XCTAssertTrue(messages.contains { $0.address == "/stagewizard/cuelist/begin" },
+                      "a tag change re-bursts the list, same as a rename")
     }
 
     func testCuelistMessagesCapsAtSixtyFourEntries() {
@@ -273,8 +303,8 @@ final class OSCFeedbackTests: XCTestCase {
 
         let items = messages.filter { $0.address == "/stagewizard/cuelist/item" }
         XCTAssertEqual(items.count, 64, "must truncate to the FIRST 64 cues")
-        XCTAssertEqual(items.first?.arguments, [.int32(0), .string("1"), .string("Cue 1")])
-        XCTAssertEqual(items.last?.arguments, [.int32(63), .string("64"), .string("Cue 64")], "the 65th+ cue must never appear")
+        XCTAssertEqual(items.first?.arguments, [.int32(0), .string("1"), .string("Cue 1"), .string("")])
+        XCTAssertEqual(items.last?.arguments, [.int32(63), .string("64"), .string("Cue 64"), .string("")], "the 65th+ cue must never appear")
     }
 
     // MARK: - D22: OSCStatusFeedback.cuelistEntries (GO sequence → capped entries, pure)
