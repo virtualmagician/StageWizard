@@ -14,14 +14,18 @@ struct InspectorView: View {
         case timeline = "Timeline"
         case geometry = "Geometry"
         case output = "Output"
+        case effects = "Effects"
         case triggers = "Shortcut"
 
-        /// Tabs relevant to each cue type (groups get Timeline).
+        /// Tabs relevant to each cue type (groups get Timeline; only camera
+        /// cues get Effects — segmentation/chroma key/magic dust/gesture GO
+        /// don't exist for any other cue type).
         static func available(for body: CueBody) -> [Tab] {
             switch body {
             case .group: return [.basics, .timeline, .triggers]
             case .audio: return [.basics, .timeAndLevels, .output, .triggers]
-            case .video, .camera, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
+            case .camera: return [.basics, .timeAndLevels, .geometry, .output, .effects, .triggers]
+            case .video, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .text: return [.basics, .text, .timeAndLevels, .geometry, .output, .triggers]
             case .fade, .stop: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
@@ -58,6 +62,8 @@ struct InspectorView: View {
                                 TimeAndLevelsTab(cueID: cueID, body: cue.body)
                             case .output:
                                 OutputTab(cueID: cueID, body: cue.body)
+                            case .effects:
+                                EffectsTab(cueID: cueID)
                             case .triggers:
                                 TriggersTab(cueID: cueID)
                             case .geometry:
@@ -1169,7 +1175,6 @@ private struct OutputTab: View {
 /// Camera source, display, and fill mode for camera cues.
 private struct CameraOutputSettings: View {
     @Environment(ShowDocumentController.self) private var document
-    @Environment(AppModel.self) private var app
     let cueID: UUID
 
     var body: some View {
@@ -1223,181 +1228,13 @@ private struct CameraOutputSettings: View {
                 ))
                 .disabled(camera.sensorOnly)
 
-                Text("Placement and scaling moved to the Geometry tab.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
-                Divider()
-                Text("Effects")
-                    .font(.headline)
-                // D25: sensor-only draws to no output, so every VISUAL effect
-                // below (segmentation/dust/chroma) is meaningless — grouped
-                // and disabled together. Gesture GO (below this group) stays
-                // fully live, since gesture tracking is the entire point.
-                Group {
-                    Toggle("Remove background (person segmentation)", isOn: Binding(
-                        get: { camera.effects.segmentation },
-                        set: { v in updateEffects { $0.segmentation = v } }
-                    ))
-                    Text("The background turns transparent — put video or images on a LOWER layer (Geometry tab) and they show behind the performer.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-
-                    Toggle("Magic dust on hands", isOn: Binding(
-                        get: { camera.effects.magicDust },
-                        set: { v in updateEffects { $0.magicDust = v } }
-                    ))
-                    if camera.effects.magicDust {
-                        HStack(spacing: 8) {
-                            Picker("Emitter", selection: Binding(
-                                get: {
-                                    camera.effects.dustEmitter != nil
-                                        ? "custom"
-                                        : (camera.effects.dustPreset ?? DustPresets.defaultName)
-                                },
-                                set: { choice in
-                                    guard choice != "custom" else { return }
-                                    updateEffects {
-                                        $0.dustPreset = choice
-                                        $0.dustEmitter = nil
-                                    }
-                                }
-                            )) {
-                                ForEach(DustPresets.names, id: \.self) { name in
-                                    Text(name).tag(name)
-                                }
-                                if let custom = camera.effects.dustEmitter {
-                                    Text("Custom: \(custom.fileName)").tag("custom")
-                                }
-                            }
-                            .frame(maxWidth: 280)
-
-                            Button("Choose .pex…") {
-                                let panel = NSOpenPanel()
-                                panel.allowsMultipleSelection = false
-                                panel.allowedContentTypes = [.init(filenameExtension: "pex") ?? .xml]
-                                panel.message = "Choose a Particle Designer emitter"
-                                if panel.runModal() == .OK, let url = panel.url {
-                                    let ref = MediaReference(fileURL: url, showFolder: document.showFolder)
-                                    updateEffects { $0.dustEmitter = ref }
-                                }
-                            }
-                        }
-                        HStack(spacing: 8) {
-                            Text("Size")
-                            Slider(value: Binding(
-                                get: { camera.effects.dustScale },
-                                set: { v in updateEffects { $0.dustScale = v } }
-                            ), in: 0.5...10)
-                            .frame(maxWidth: 240)
-                            Text(String(format: "×%.1f", camera.effects.dustScale))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 48, alignment: .trailing)
-                        }
-                        Text("Particles follow the performer's hands — pick a preset or any Particle Designer .pex.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Toggle("Chroma key", isOn: Binding(
-                        get: { camera.effects.chromaKey },
-                        set: { v in updateEffects { $0.chromaKey = v } }
-                    ))
-                    if camera.effects.chromaKey {
-                        ColorPicker("Key color", selection: Binding(
-                            get: {
-                                let c = camera.effects.chromaKeyColor
-                                return Color(red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
-                            },
-                            set: { color in
-                                let resolved = NSColor(color).usingColorSpace(.sRGB) ?? .green
-                                updateEffects {
-                                    $0.chromaKeyColor = RGBAColor(
-                                        red: resolved.redComponent, green: resolved.greenComponent,
-                                        blue: resolved.blueComponent, alpha: resolved.alphaComponent
-                                    )
-                                }
-                            }
-                        ), supportsOpacity: false)
-                        .frame(maxWidth: 280)
-
-                        HStack(spacing: 8) {
-                            Text("Tolerance")
-                            Slider(value: Binding(
-                                get: { camera.effects.chromaTolerance },
-                                set: { v in updateEffects { $0.chromaTolerance = v } }
-                            ), in: 0...1)
-                            .frame(maxWidth: 240)
-                            Text(String(format: "%.2f", camera.effects.chromaTolerance))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 48, alignment: .trailing)
-                        }
-                        HStack(spacing: 8) {
-                            Text("Softness")
-                            Slider(value: Binding(
-                                get: { camera.effects.chromaSoftness },
-                                set: { v in updateEffects { $0.chromaSoftness = v } }
-                            ), in: 0...1)
-                            .frame(maxWidth: 240)
-                            Text(String(format: "%.2f", camera.effects.chromaSoftness))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 48, alignment: .trailing)
-                        }
-                        Text("Pixels near the key color turn transparent — put video or images on a LOWER layer (Geometry tab) and they show behind the performer.")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }   // end visual-effects Group
-                .disabled(camera.sensorOnly)
-
-                Toggle("Gesture GO", isOn: Binding(
-                    get: { camera.effects.gestureGo },
-                    set: { v in updateEffects { $0.gestureGo = v } }
-                ))
-                if camera.effects.gestureGo {
-                    Picker("Gesture", selection: Binding(
-                        get: { camera.effects.goGesture },
-                        set: { g in updateEffects { $0.goGesture = g } }
-                    )) {
-                        ForEach(HandGesture.allCases, id: \.self) { gesture in
-                            Text(gesture.label).tag(gesture)
-                        }
-                    }
-                    .frame(maxWidth: 280)
-
-                    HStack(spacing: 8) {
-                        Text("Hold")
-                        Slider(value: Binding(
-                            get: { camera.effects.gestureHoldSeconds },
-                            set: { v in updateEffects { $0.gestureHoldSeconds = v } }
-                        ), in: 0.25...5, step: 0.25)
-                        .frame(maxWidth: 240)
-                        Text(String(format: "%.2f s", camera.effects.gestureHoldSeconds))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 56, alignment: .trailing)
-                    }
-                }
-                Text("Experimental — fires GO when the chosen gesture is held to the camera for the configured warm-up time. Active in Show and Rehearsal modes.")
+                Text("Placement and scaling moved to the Geometry tab. Segmentation, chroma key, magic dust, and gesture GO moved to the Effects tab.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
             .formStyle(.columns)
             .padding(12)
         }
-    }
-
-    private func updateEffects(_ change: (inout CameraEffects) -> Void) {
-        document.updateCue(cueID) { cue in
-            if case .camera(var b) = cue.body {
-                change(&b.effects)
-                cue.body = .camera(b)
-            }
-        }
-        app.pushEffects(cueID: cueID)
     }
 
     private func update(_ change: (inout CameraBody) -> Void) {
