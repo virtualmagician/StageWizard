@@ -66,7 +66,8 @@ final class EnginePlayerProvider: CuePlayerProviding {
                 body.cameraName = nil
             }
             let targets = try resolveTargets(
-                groupID: body.outputGroupID, legacy: body.display, cueNumber: cue.number
+                groupID: body.outputGroupID, legacy: body.display, cueNumber: cue.number,
+                sensorOnly: body.sensorOnly
             )
             let player = try await CameraCuePlayer.arm(
                 body: body, targets: targets,
@@ -123,11 +124,23 @@ final class EnginePlayerProvider: CuePlayerProviding {
     /// preview window in EVERY mode (Show included) — checked first, before
     /// the rehearsal branch, since rehearsal already resolves every group to
     /// the same preview target anyway.
-    private func resolveTargets(
+    ///
+    /// D25: `sensorOnly` (camera cues only) short-circuits ALL of the above —
+    /// a sensor-only camera draws to no output, so it needs no routing at
+    /// all: no floating/rehearsal/display resolution, and none of the extra
+    /// mirror/virtual-camera targets either (nothing draws, so nothing to
+    /// mirror). Checked first, before touching `extraTargets` or any
+    /// display/window state, so it never throws `.noOutputAssigned` for
+    /// having no group — and stays a pure, no-hardware-required decision for
+    /// direct unit testing (not `private`, for exactly that reason — same
+    /// seam as `extraTargets`/`floatingTarget` below).
+    func resolveTargets(
         groupID: UUID?,
         legacy: DisplayFingerprint?,
-        cueNumber: String
+        cueNumber: String,
+        sensorOnly: Bool = false
     ) throws -> [OutputTarget] {
+        if sensorOnly { return [] }
         let extra = Self.extraTargets(
             groupID: groupID,
             settings: settings(),

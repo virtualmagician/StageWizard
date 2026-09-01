@@ -184,7 +184,14 @@ enum GestureClassifier {
 /// cooldown ends; it needs a fresh full `holdDuration`, exactly like a
 /// gesture that left and came back.
 struct GestureHoldDetector {
-    private static let holdDuration: TimeInterval = 1.0
+    /// D25: the warm-up time is now selectable per cue
+    /// (`CameraEffects.gestureHoldSeconds`, clamped 0.25…5 s at the model
+    /// layer) — an INSTANCE property fixed at init, not a global constant.
+    /// `CameraFrameProcessor.configure` already rebuilds a fresh detector on
+    /// every reconfigure (same as a `goGesture` change today), so there's
+    /// never a need to change it mid-hold. Flicker tolerance and cooldown
+    /// stay fixed — only the warm-up itself is configurable.
+    private let holdDuration: TimeInterval
     private static let flickerTolerance: TimeInterval = 0.2
     private static let cooldownDuration: TimeInterval = 3.0
 
@@ -207,7 +214,12 @@ struct GestureHoldDetector {
     /// Non-nil while cooling down; nothing can fire before this time.
     private var cooldownUntil: TimeInterval?
 
-    init() {}
+    /// - Parameter holdDuration: seconds the gesture must be held before GO
+    ///   fires. Defaults to the pre-D25 fixed duration so every existing
+    ///   call site (and every existing test) behaves exactly as before.
+    init(holdDuration: TimeInterval = 1.0) {
+        self.holdDuration = holdDuration
+    }
 
     /// Feed one frame's observation. `fired` is true exactly on the frame
     /// that completes a hold — fire GO once — and starts the cooldown.
@@ -236,8 +248,8 @@ struct GestureHoldDetector {
             return Result(fired: false, holdProgress: 0, cooldownRemaining: 0)
         }
         let elapsed = time - holdStartedAt
-        guard elapsed >= Self.holdDuration else {
-            return Result(fired: false, holdProgress: min(max(elapsed / Self.holdDuration, 0), 1), cooldownRemaining: 0)
+        guard elapsed >= holdDuration else {
+            return Result(fired: false, holdProgress: min(max(elapsed / holdDuration, 0), 1), cooldownRemaining: 0)
         }
         self.holdStartedAt = nil
         self.lastSeenAt = nil

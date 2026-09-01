@@ -65,6 +65,39 @@ final class PreflightTests: XCTestCase {
         XCTAssertTrue(issues.first?.message.contains("no video output assigned") ?? false)
     }
 
+    func testCameraCueWithNilOutputGroupIsErrorMatchingVideo() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .camera(CameraBody()))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no video output assigned") ?? false)
+    }
+
+    // MARK: - D25: sensor-only camera cues are exempt from the output-group checks
+
+    func testSensorOnlyCameraCueWithNilOutputGroupHasNoError() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .camera(CameraBody(sensorOnly: true)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "a sensor-only camera cue needs no output group: \(issues)")
+    }
+
+    func testSensorOnlyCameraCueStillNeedsCameraAuthorization() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .camera(CameraBody(sensorOnly: true)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: false, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.contains {
+            $0.cueNumber == nil && $0.severity == .error && $0.message.contains("Camera access")
+        }, "sensor-only still needs camera permission — only the output-group check is exempt")
+    }
+
     // MARK: - Output group display connectivity, and the virtual-webcam carve-out
 
     func testVideoCueWithAllGroupDisplaysDisconnectedIsError() {

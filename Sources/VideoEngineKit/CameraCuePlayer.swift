@@ -109,6 +109,11 @@ public final class CameraCuePlayer: MediaPlayback {
     /// True when the processor must flip frames itself (mirroring couldn't
     /// be pushed down into the capture connection).
     private let processorMirrors: Bool
+    /// D25: this cue draws to NO output — it exists purely as a hand-
+    /// gesture sensor. Fixed at arm time (mirrors `CameraBody.sensorOnly`);
+    /// gates target leasing, attach/detach, geometry/opacity pushes, and
+    /// reduces every effects update to gesture-only (see `effectiveEffects`).
+    private let sensorOnly: Bool
     private var effects: CameraEffects
     private var dustEmitterURL: URL?
     /// Per target: up to 2 emitters (one per tracked hand), above the content.
@@ -190,7 +195,10 @@ public final class CameraCuePlayer: MediaPlayback {
 
         let player = try CameraCuePlayer(
             body: body, session: session, dustEmitterURL: dustEmitterURL,
-            targets: targets, windowFrameOverride: windowFrameOverride
+            // D25: sensor-only NEVER leases a window/host, no matter what
+            // the caller passed — the enforcement point is here, not just a
+            // convention that `resolveTargets` happens to return `[]`.
+            targets: body.sensorOnly ? [] : targets, windowFrameOverride: windowFrameOverride
         )
         // Spin the session up at arm so GO is instant. Blocking call →
         // detached; the session is internally thread-safe for start/stop.
@@ -210,7 +218,8 @@ public final class CameraCuePlayer: MediaPlayback {
     ) throws {
         self.sessionBox = SessionBox(session: session)
         self.targets = targets
-        self.effects = body.effects
+        self.sensorOnly = body.sensorOnly
+        self.effects = Self.effectiveEffects(body.effects, sensorOnly: body.sensorOnly)
         self.dustEmitterURL = dustEmitterURL
         self.fillModeSetting = body.fillMode
         self.geometrySetting = body.geometry
@@ -299,6 +308,26 @@ public final class CameraCuePlayer: MediaPlayback {
 
     // MARK: - Effects
 
+    /// D25: a sensor-only cue draws to no output at all, so segmentation /
+    /// magic dust / chroma key — every effect that only exists to change
+    /// what gets DRAWN — are pointless work and forced off regardless of
+    /// what's saved on the cue. Gesture GO (enable, pose, hold) is left
+    /// completely untouched — gesture tracking is the entire point of
+    /// sensor-only mode. Pulled out as a pure static function (rather than
+    /// inlined at each call site) so both write sites (`init`, `applyEffects`)
+    /// can't drift, and so the reduction itself is directly unit-testable.
+    /// `nonisolated` — it touches no actor-isolated state (plain value types
+    /// in, plain value types out), so it's callable from a synchronous,
+    /// non-MainActor test context without hopping actors.
+    nonisolated static func effectiveEffects(_ effects: CameraEffects, sensorOnly: Bool) -> CameraEffects {
+        guard sensorOnly else { return effects }
+        var reduced = effects
+        reduced.segmentation = false
+        reduced.magicDust = false
+        reduced.chromaKey = false
+        return reduced
+    }
+
     private func wireProcessor() {
         processor.configure(
             segmentation: effects.segmentation,
@@ -310,6 +339,7 @@ public final class CameraCuePlayer: MediaPlayback {
             chromaSoftness: effects.chromaSoftness,
             gestureGo: effects.gestureGo,
             goGesture: effects.goGesture,
+            gestureHoldSeconds: effects.gestureHoldSeconds,
             onFrame: { [weak self] product in
                 Task { @MainActor in
                     self?.showProcessedFrame(product)
@@ -433,18 +463,22 @@ public final class CameraCuePlayer: MediaPlayback {
     /// processed is just layer visibility — the session keeps running.
     public func applyEffects(_ newEffects: CameraEffects, dustEmitterURL: URL?) {
         guard !stopped else { return }
-        if effects.gestureGo, !newEffects.gestureGo {
+        // D25: reduce BEFORE comparing/storing — sensorOnly forces
+        // segmentation/magicDust/chromaKey off regardless of what the model
+        // carries, same as at arm time.
+        let effective = Self.effectiveEffects(newEffects, sensorOnly: sensorOnly)
+        if effects.gestureGo, !effective.gestureGo {
             // Gesture tracking is turning off while the cue keeps running —
             // the processor will simply stop streaming, so clear explicitly
             // rather than leaving a stale readout on the stage display.
             onGestureReadout?(nil)
         }
-        effects = newEffects
+        effects = effective
         self.dustEmitterURL = dustEmitterURL
         wireProcessor()
-        setProcessedMode(newEffects.anyEnabled)
+        setProcessedMode(effective.anyEnabled)
         rebuildDustEmitters()
-        processor.output.connection(with: .video)?.isEnabled = newEffects.anyEnabled
+        processor.output.connection(with: .video)?.isEnabled = effective.anyEnabled
     }
 
     private func setProcessedMode(_ processed: Bool) {
@@ -463,9 +497,12 @@ public final class CameraCuePlayer: MediaPlayback {
     // MARK: - Geometry / layers
 
     /// Live geometry update — the transform rides the CONTAINER; the inner
-    /// layers only track gravity.
+    /// layers only track gravity. D25: a sensor-only cue has no container to
+    /// move — no-op (this already falls out of `targetLayers` being empty,
+    /// but the explicit guard documents the invariant and skips the dead
+    /// CATransaction).
     public func applyGeometry(_ geometry: VideoGeometry, fillMode: FillMode) {
-        guard !stopped else { return }
+        guard !stopped, !sensorOnly else { return }
         geometrySetting = geometry
         fillModeSetting = fillMode
         let gravity = geometry.gravity(fillMode: fillMode)
@@ -499,9 +536,12 @@ public final class CameraCuePlayer: MediaPlayback {
     /// content siblings, same shape as `init`'s per-target construction)
     /// matching the cue's CURRENT effects mode/fill mode/geometry/render
     /// layer/opacity, then rebuild dust emitters so the new target gets its
-    /// own pair too. Idempotent.
+    /// own pair too. Idempotent. D25: a sensor-only cue never mirrors
+    /// anywhere — nothing draws, so there's nothing to attach — no-op even
+    /// if a stale group id somehow makes this cue look like a mirror
+    /// candidate (see `CueBody.outputGroupID`, the normal line of defense).
     public func attachTarget(_ target: OutputTarget) {
-        guard !stopped, !allTargets.contains(target) else { return }
+        guard !stopped, !sensorOnly, !allTargets.contains(target) else { return }
         guard let host = try? OutputWindowManager.shared.hostLayer(for: target) else { return }
 
         // Mid-fade-safe: read the PRESENTATION opacity of an existing
@@ -648,7 +688,11 @@ public final class CameraCuePlayer: MediaPlayback {
         return layer
     }
 
+    /// D25: sensor-only has no container to fade (`start()`'s fade-in and
+    /// `fadeOpacity` both funnel through here) — no-op. Already implied by
+    /// `containers` being empty, but the explicit guard pins the invariant.
     private func animateOpacity(to value: Float, duration: TimeInterval) {
+        guard !sensorOnly else { return }
         for layer in containers {
             let animation = CABasicAnimation(keyPath: "opacity")
             animation.fromValue = layer.presentation()?.opacity ?? layer.opacity

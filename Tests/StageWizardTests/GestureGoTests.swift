@@ -78,6 +78,55 @@ final class GestureGoTests: XCTestCase {
         }
     }
 
+    // MARK: - D25: gestureHoldSeconds — defaults for older files, clamp, strip-key, round-trip
+
+    func testGestureHoldSecondsDefaultsToOneSecondForOlderFiles() throws {
+        // Pre-D25 files predate the selectable warm-up time entirely — bare `{}`.
+        let old = try JSONDecoder().decode(CameraEffects.self, from: Data("{}".utf8))
+        XCTAssertEqual(old.gestureHoldSeconds, 1.0)
+    }
+
+    func testGestureHoldSecondsStripKeyDefaultsToOneSecondMatchingPreD25Behavior() throws {
+        // A pre-D25 file: gestureGo:true, but no gestureHoldSeconds key at
+        // all — every file before D25 used a fixed 1 s hold, so that must be
+        // exactly what this decodes to (unchanged GO timing for every show).
+        let effects = CameraEffects(gestureGo: true, gestureHoldSeconds: 3.5)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(effects)) as! [String: Any]
+        json.removeValue(forKey: "gestureHoldSeconds")
+        let decoded = try JSONDecoder().decode(
+            CameraEffects.self, from: try JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertTrue(decoded.gestureGo)
+        XCTAssertEqual(decoded.gestureHoldSeconds, 1.0)
+    }
+
+    func testGestureHoldSecondsClampsToValidRangeOnInit() {
+        XCTAssertEqual(CameraEffects(gestureHoldSeconds: 0).gestureHoldSeconds, 0.25)
+        XCTAssertEqual(CameraEffects(gestureHoldSeconds: 0.1).gestureHoldSeconds, 0.25)
+        XCTAssertEqual(CameraEffects(gestureHoldSeconds: 5).gestureHoldSeconds, 5)
+        XCTAssertEqual(CameraEffects(gestureHoldSeconds: 99).gestureHoldSeconds, 5)
+        XCTAssertEqual(CameraEffects(gestureHoldSeconds: 2.5).gestureHoldSeconds, 2.5)
+    }
+
+    func testGestureHoldSecondsClampsOnDecodeToo() throws {
+        // A hand-edited (or future-app-written) file with an out-of-range
+        // value must still clamp on the way in, exactly like every other
+        // clamped field in this struct.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(CameraEffects())) as! [String: Any]
+        json["gestureHoldSeconds"] = 42.0
+        let decoded = try JSONDecoder().decode(
+            CameraEffects.self, from: try JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertEqual(decoded.gestureHoldSeconds, 5)
+    }
+
+    func testGestureHoldSecondsRoundTrip() throws {
+        let effects = CameraEffects(gestureGo: true, gestureHoldSeconds: 2.25)
+        let decoded = try JSONDecoder().decode(CameraEffects.self, from: JSONEncoder().encode(effects))
+        XCTAssertEqual(decoded, effects)
+        XCTAssertEqual(decoded.gestureHoldSeconds, 2.25)
+    }
+
     // MARK: - HandGesture: display metadata
 
     func testHandGestureHasFourCases() {
@@ -469,5 +518,76 @@ final class GestureGoTests: XCTestCase {
 
         let ready = detector.update(gestureSeen: false, at: 4.0)
         XCTAssertEqual(ready.cooldownRemaining, 0)
+    }
+
+    // MARK: - GestureHoldDetector: D25 selectable warm-up time
+
+    func testHalfSecondHoldFiresAfterHalfSecondContinuous() {
+        var detector = GestureHoldDetector(holdDuration: 0.5)
+        var results: [Bool] = []
+        for i in 0...4 {   // 0.0, 0.125, 0.25, 0.375, 0.5
+            results.append(detector.update(gestureSeen: true, at: Double(i) * 0.125).fired)
+        }
+        XCTAssertEqual(results, Array(repeating: false, count: 4) + [true])
+    }
+
+    func testThreeSecondHoldDoesNotFireAtTwoPointNineSeconds() {
+        var detector = GestureHoldDetector(holdDuration: 3.0)
+        // Dense continuous sampling (well within the 0.2 s flicker
+        // tolerance — sparse calls with real gaps between them would
+        // themselves look like a flicker and reset the hold) up to 2.875 s,
+        // then a direct check at 2.9 s — still short of the 3 s hold —
+        // before the final sample completes it at 3.0 s.
+        for i in 0...23 {   // 0.0, 0.125, …, 2.875
+            XCTAssertFalse(detector.update(gestureSeen: true, at: Double(i) * 0.125).fired)
+        }
+        XCTAssertFalse(detector.update(gestureSeen: true, at: 2.9).fired, "0.1 s short of a 3 s hold must not fire")
+        XCTAssertTrue(detector.update(gestureSeen: true, at: 3.0).fired)
+    }
+
+    func testHoldProgressNormalizesToTheConfiguredDurationNotAFixedOneSecond() {
+        // Half of a 3 s hold should read 0.5, not 0.5/1.0 — progress is
+        // relative to whatever `holdDuration` this detector was configured
+        // with, whatever that length is. Sampled every 0.125 s like
+        // `testHoldProgressRampsZeroToOneAcrossOneSecondHold` above, just at
+        // 3× the span.
+        var detector = GestureHoldDetector(holdDuration: 3.0)
+        var progresses: [Double] = []
+        for i in 0...24 {   // 0.0, 0.125, …, 3.0
+            progresses.append(detector.update(gestureSeen: true, at: Double(i) * 0.125).holdProgress)
+        }
+        XCTAssertEqual(progresses.first ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(progresses.last ?? -1, 1, accuracy: 0.0001)
+        XCTAssertEqual(progresses[12], 0.5, accuracy: 0.0001)   // t = 1.5 s, half of 3.0 s
+    }
+
+    // MARK: - D25: CameraCuePlayer.effectiveEffects (sensor-only effect reduction)
+
+    func testEffectiveEffectsPassesThroughUnchangedWhenNotSensorOnly() {
+        let effects = CameraEffects(segmentation: true, magicDust: true, chromaKey: true, gestureGo: true)
+        XCTAssertEqual(CameraCuePlayer.effectiveEffects(effects, sensorOnly: false), effects)
+    }
+
+    func testEffectiveEffectsForcesVisualEffectsOffWhenSensorOnly() {
+        let effects = CameraEffects(
+            segmentation: true, magicDust: true, chromaKey: true,
+            gestureGo: true, goGesture: .fist, gestureHoldSeconds: 2.0
+        )
+        let reduced = CameraCuePlayer.effectiveEffects(effects, sensorOnly: true)
+        XCTAssertFalse(reduced.segmentation)
+        XCTAssertFalse(reduced.magicDust)
+        XCTAssertFalse(reduced.chromaKey)
+        // Gesture controls (enable/pose/hold) are left completely alone —
+        // gesture tracking is the entire point of sensor-only mode.
+        XCTAssertTrue(reduced.gestureGo)
+        XCTAssertEqual(reduced.goGesture, .fist)
+        XCTAssertEqual(reduced.gestureHoldSeconds, 2.0)
+    }
+
+    func testEffectiveEffectsLeavesAGestureOnlyConfigurationUnchanged() {
+        let effects = CameraEffects(gestureGo: true)
+        let reduced = CameraCuePlayer.effectiveEffects(effects, sensorOnly: true)
+        XCTAssertEqual(reduced, effects)
+        XCTAssertTrue(reduced.anyEnabled, "gestureGo alone still counts toward anyEnabled after reduction")
     }
 }

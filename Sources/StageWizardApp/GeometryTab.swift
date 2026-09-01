@@ -73,10 +73,13 @@ struct GeometryTab: View {
                 }
                 .formStyle(.columns)
                 .frame(width: 300)
-                .disabled(app.isShowMode)
+                .disabled(app.isShowMode || isSensorOnlyCamera(cue))
 
                 if geometry.mode == .custom {
-                    StageCanvas(cueID: cueID, geometry: geometry, locked: app.isShowMode) { newX, newY in
+                    StageCanvas(
+                        cueID: cueID, geometry: geometry,
+                        locked: app.isShowMode || isSensorOnlyCamera(cue)
+                    ) { newX, newY in
                         update { $0.x = newX; $0.y = newY }
                     }
                     .frame(minWidth: 260, maxWidth: .infinity, minHeight: 150, maxHeight: 220)
@@ -118,6 +121,13 @@ struct GeometryTab: View {
     private func hasFillMode(_ cue: Cue) -> Bool {
         if case .text = cue.body { return false }
         return true
+    }
+
+    /// D25: a sensor-only camera cue draws nowhere, so its placement/layer
+    /// controls are dimmed alongside Show mode's own lock.
+    private func isSensorOnlyCamera(_ cue: Cue) -> Bool {
+        if case .camera(let body) = cue.body { return body.sensorOnly }
+        return false
     }
 
     private func layerBinding(_ cue: Cue) -> Binding<Int> {

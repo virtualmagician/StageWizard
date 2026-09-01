@@ -616,6 +616,50 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertNil(EnginePlayerProvider.floatingTarget(groupID: UUID(), settings: ShowSettings()))
     }
 
+    // MARK: - D25: EnginePlayerProvider.resolveTargets — sensor-only camera exception
+    //
+    // A sensor-only camera cue draws to no output at all, so it carves the
+    // one deliberate exception into the pinned "video/camera/image/slide
+    // cues REQUIRE an output group" rule: `resolveTargets` must return an
+    // EMPTY target list without throwing `ArmError.noOutputAssigned`, even
+    // with `groupID: nil` — and, unlike a normal camera cue, must NOT pick
+    // up the virtual-webcam monitor or a stage-display program mirror
+    // either (nothing draws, so nothing to mirror). The check happens
+    // first, before any floating/rehearsal/display/extras logic, so it
+    // needs no real display or camera hardware to test.
+
+    func testResolveTargetsReturnsEmptyForSensorOnlyCameraWithNoGroupAndDoesNotThrow() throws {
+        let provider = EnginePlayerProvider()
+        let targets = try provider.resolveTargets(groupID: nil, legacy: nil, cueNumber: "1", sensorOnly: true)
+        XCTAssertTrue(targets.isEmpty)
+    }
+
+    func testResolveTargetsStillThrowsNoOutputAssignedForANormalCameraCueWithNoGroup() {
+        let provider = EnginePlayerProvider()
+        XCTAssertThrowsError(
+            try provider.resolveTargets(groupID: nil, legacy: nil, cueNumber: "1", sensorOnly: false)
+        ) { error in
+            guard case ArmError.noOutputAssigned = error else {
+                return XCTFail("expected .noOutputAssigned, got \(error)")
+            }
+        }
+    }
+
+    func testResolveTargetsIgnoresAConfiguredGroupWhenSensorOnly() throws {
+        // Even with a real, valid group assigned, sensor-only skips routing
+        // to it entirely — it never draws, so the group is irrelevant.
+        let group = OutputGroup(name: "Main", virtualCamera: true)
+        var settings = ShowSettings()
+        settings.outputGroups = [group]
+        let provider = EnginePlayerProvider()
+        provider.settings = { settings }
+        provider.virtualCameraFeeding = { true }
+        let targets = try provider.resolveTargets(
+            groupID: group.id, legacy: nil, cueNumber: "1", sensorOnly: true
+        )
+        XCTAssertTrue(targets.isEmpty, "sensor-only must skip the virtual-camera extra target too: \(targets)")
+    }
+
     // MARK: - StageDisplayController.isActive (pure decision, no window)
 
     func testIsActiveFalseInEditModeEvenWhenEverythingElseQualifies() {
@@ -803,6 +847,14 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertNil(CueBody.broken(BrokenBody(originalType: "hologram")).outputGroupID)
         // A visual cue with no group assigned yet — nil, not a crash.
         XCTAssertNil(CueBody.video(VideoBody(media: MediaReference(absolutePath: "/f.mov"))).outputGroupID)
+    }
+
+    // D25: a sensor-only camera cue draws nowhere, so it must never surface
+    // a group id here — even a stale one still saved on the body — or it
+    // would look like a live-mirror candidate to `AppModel.syncMirrorAttachments`.
+    func testCueBodyOutputGroupIDNilForSensorOnlyCameraEvenWithGroupStillSaved() {
+        let groupID = UUID()
+        XCTAssertNil(CueBody.camera(CameraBody(outputGroupID: groupID, sensorOnly: true)).outputGroupID)
     }
 
     // MARK: - D17: AppModel.mirrorAttachDiff (pure live mirror attach/detach decision)

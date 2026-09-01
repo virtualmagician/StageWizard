@@ -16,7 +16,8 @@ public struct GestureReadout: Sendable, Equatable {
     /// Every gesture recognized in the current frame (may include `goGesture`
     /// itself, plus any others detected alongside it).
     public var detected: [HandGesture]
-    /// 0…1 toward the 1 s hold of `goGesture`; 0 while idle or cooling down.
+    /// 0…1 toward the CONFIGURED hold of `goGesture`
+    /// (`CameraEffects.gestureHoldSeconds`); 0 while idle or cooling down.
     public var holdProgress: Double
     /// Seconds remaining before a new hold may start; 0 when ready.
     public var cooldownRemaining: Double
@@ -67,6 +68,9 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var gestureGoEnabled = false
     /// D15: which hand shape `gestureGoEnabled` waits for.
     private var goGesture: HandGesture = .openPalm
+    /// D25: selectable warm-up time (`CameraEffects.gestureHoldSeconds`),
+    /// forwarded straight into `gestureHold` on every `configure` call.
+    private var gestureHoldSeconds: TimeInterval = 1.0
     private var onFrame: (@Sendable (FrameProduct) -> Void)?
     /// Fired once when the hold completes; queue-confined state
     /// (`gestureHold`) drives it, but the callback itself hops to the
@@ -142,6 +146,7 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
         chromaSoftness: Double,
         gestureGo: Bool,
         goGesture: HandGesture,
+        gestureHoldSeconds: TimeInterval,
         onFrame: @escaping @Sendable (FrameProduct) -> Void,
         onGesture: @escaping @Sendable () -> Void,
         onGestureReadout: @escaping @Sendable (GestureReadout) -> Void
@@ -156,15 +161,16 @@ final class CameraFrameProcessor: NSObject, AVCaptureVideoDataOutputSampleBuffer
             self.chromaSoftness = min(max(chromaSoftness, 0), 1)
             self.gestureGoEnabled = gestureGo
             self.goGesture = goGesture
+            self.gestureHoldSeconds = gestureHoldSeconds
             self.onFrame = onFrame
             self.onGesture = onGesture
             self.onGestureReadout = onGestureReadout
             // A reconfigure (effects toggled from the inspector, or an
             // initial wire-up) always starts gesture tracking fresh — no
             // stale in-progress hold/cooldown, and no stale dedup cache that
-            // could suppress the first readout after gestureGo/goGesture
-            // changes.
-            self.gestureHold = GestureHoldDetector()
+            // could suppress the first readout after gestureGo/goGesture/
+            // gestureHoldSeconds changes.
+            self.gestureHold = GestureHoldDetector(holdDuration: gestureHoldSeconds)
             self.lastDeliveredReadout = nil
             self.lastReadoutSentAt = nil
         }

@@ -127,6 +127,23 @@ final class V7Tests: XCTestCase {
         XCTAssertEqual(decoded.effects.dustEmitter?.fileName, "sparkle.pex")
     }
 
+    // MARK: - D25: CameraBody.sensorOnly
+
+    func testSensorOnlyDefaultsFalseForOlderFiles() throws {
+        // Pre-D25 files predate sensor-only mode entirely — strip the key.
+        let body = CameraBody()
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as! [String: Any]
+        json.removeValue(forKey: "sensorOnly")
+        let decoded = try JSONDecoder().decode(CameraBody.self, from: try JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(decoded.sensorOnly)
+    }
+
+    func testSensorOnlyRoundTrip() throws {
+        let body = CameraBody(sensorOnly: true)
+        let decoded = try JSONDecoder().decode(CameraBody.self, from: JSONEncoder().encode(body))
+        XCTAssertTrue(decoded.sensorOnly)
+    }
+
     // MARK: - Capture → layer coordinate mapping
 
     func testMapNormalizedPointStretch() {

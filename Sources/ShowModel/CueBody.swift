@@ -60,11 +60,14 @@ public enum CueBody: Hashable, Sendable {
     /// single place that extracts a cue's group id, shared by the live
     /// mirror-attach diff (`AppModel.syncMirrorAttachments`) and anywhere
     /// else that needs it — mirrors exactly the `groupID` `EngineBridge`
-    /// resolves targets against at arm time.
+    /// resolves targets against at arm time. D25: a sensor-only camera cue
+    /// draws nowhere, so it reports nil here even if a group id is still
+    /// saved on the body — it must never be treated as a live-mirror
+    /// candidate.
     public var outputGroupID: UUID? {
         switch self {
         case .video(let body): return body.outputGroupID
-        case .camera(let body): return body.outputGroupID
+        case .camera(let body): return body.sensorOnly ? nil : body.outputGroupID
         case .image(let body): return body.outputGroupID
         case .text(let body): return body.outputGroupID
         case .slide(let body): return body.outputGroupID
@@ -417,6 +420,10 @@ public struct CameraEffects: Codable, Hashable, Sendable {
     /// D11 only ever recognized an open palm, so an old file with
     /// `gestureGo: true` and no `goGesture` key behaves exactly as before.
     public var goGesture: HandGesture
+    /// D25: how long `goGesture` must be held before GO fires, 0.25…5 s.
+    /// Default 1.0 matches the fixed duration every file before D25 used —
+    /// an old file with no key decodes to exactly the old behavior.
+    public var gestureHoldSeconds: Double
 
     public init(
         segmentation: Bool = false,
@@ -429,7 +436,8 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         chromaTolerance: Double = 0.35,
         chromaSoftness: Double = 0.1,
         gestureGo: Bool = false,
-        goGesture: HandGesture = .openPalm
+        goGesture: HandGesture = .openPalm,
+        gestureHoldSeconds: Double = 1.0
     ) {
         self.segmentation = segmentation
         self.magicDust = magicDust
@@ -442,6 +450,7 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         self.chromaSoftness = min(max(chromaSoftness, 0), 1)
         self.gestureGo = gestureGo
         self.goGesture = goGesture
+        self.gestureHoldSeconds = min(max(gestureHoldSeconds, 0.25), 5)
     }
 
     public var anyEnabled: Bool { segmentation || magicDust || chromaKey || gestureGo }
@@ -449,6 +458,7 @@ public struct CameraEffects: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case segmentation, magicDust, dustEmitter, dustPreset, dustScale
         case chromaKey, chromaKeyColor, chromaTolerance, chromaSoftness, gestureGo, goGesture
+        case gestureHoldSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -469,6 +479,9 @@ public struct CameraEffects: Codable, Hashable, Sendable {
         // Pre-D15 files predate the gesture picker; D11 only ever recognized
         // an open palm, so that's the default for every older file too.
         goGesture = try c.decodeIfPresent(HandGesture.self, forKey: .goGesture) ?? .openPalm
+        // Pre-D25 files predate the selectable warm-up time; default to the
+        // fixed 1 s every one of them actually used.
+        gestureHoldSeconds = min(max(try c.decodeIfPresent(Double.self, forKey: .gestureHoldSeconds) ?? 1.0, 0.25), 5)
     }
 }
 
@@ -491,6 +504,14 @@ public struct CameraBody: Codable, Hashable, Sendable {
     public var layer: Int
     /// Live effects (segmentation, magic dust) — all off by default.
     public var effects: CameraEffects
+    /// D25: the camera runs purely as a hand-gesture sensor — it draws to
+    /// NO output at all (no window/preview/content layers, no output group
+    /// needed). This carves the one deliberate exception into the pinned
+    /// "video/camera/image/slide cues REQUIRE an output group" rule — see
+    /// `EnginePlayerProvider.resolveTargets` and `CameraCuePlayer`. Lives on
+    /// the BODY (not `effects`) because it changes OUTPUT semantics, not
+    /// frame processing.
+    public var sensorOnly: Bool
 
     public init(
         cameraUID: String? = nil,
@@ -502,7 +523,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
         fadeInDuration: TimeInterval = 0,
         fadeOutDuration: TimeInterval = 0,
         layer: Int = 5,
-        effects: CameraEffects = CameraEffects()
+        effects: CameraEffects = CameraEffects(),
+        sensorOnly: Bool = false
     ) {
         self.cameraUID = cameraUID
         self.cameraName = cameraName
@@ -514,11 +536,12 @@ public struct CameraBody: Codable, Hashable, Sendable {
         self.fadeOutDuration = fadeOutDuration
         self.layer = layer.clampedToLayerRange
         self.effects = effects
+        self.sensorOnly = sensorOnly
     }
 
     private enum CodingKeys: String, CodingKey {
         case cameraUID, cameraName, display, outputGroupID, fillMode, geometry
-        case fadeInDuration, fadeOutDuration, layer, effects
+        case fadeInDuration, fadeOutDuration, layer, effects, sensorOnly
     }
 
     public init(from decoder: Decoder) throws {
@@ -533,6 +556,8 @@ public struct CameraBody: Codable, Hashable, Sendable {
         fadeOutDuration = try c.decode(TimeInterval.self, forKey: .fadeOutDuration)
         layer = (try c.decodeIfPresent(Int.self, forKey: .layer) ?? 5).clampedToLayerRange
         effects = try c.decodeIfPresent(CameraEffects.self, forKey: .effects) ?? CameraEffects()
+        // Pre-D25 files predate sensor-only mode; default off (draws as before).
+        sensorOnly = try c.decodeIfPresent(Bool.self, forKey: .sensorOnly) ?? false
     }
 }
 

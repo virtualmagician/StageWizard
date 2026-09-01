@@ -167,11 +167,13 @@ enum Preflight {
 
     /// nil = not a visual-output cue, or a legacy direct-display cue (handled
     /// at arm time, not here). `.some(nil)` = visual cue with no group
-    /// assigned. `.some(.some(id))` = the group id to validate.
+    /// assigned. `.some(.some(id))` = the group id to validate. D25: a
+    /// sensor-only camera cue draws nowhere, so it's exempt entirely — same
+    /// nil as a legacy direct-display cue.
     private static func outputGroupRequirement(for body: CueBody) -> UUID?? {
         switch body {
         case .video(let b): return b.display == nil ? .some(b.outputGroupID) : nil
-        case .camera(let b): return b.display == nil ? .some(b.outputGroupID) : nil
+        case .camera(let b): return (b.display == nil && !b.sensorOnly) ? .some(b.outputGroupID) : nil
         case .image(let b): return .some(b.outputGroupID)
         case .text(let b): return .some(b.outputGroupID)
         case .slide(let b): return .some(b.outputGroupID)

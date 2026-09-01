@@ -143,7 +143,14 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   stays physical). Panic is not a ShortcutAction — remotes reach it via
   TriggerRouter.routePanic() → transport.panic(), same as Esc.
 - GO past the last cue goes dead — no wraparound.
-- Video/camera/image/slide cues REQUIRE an output group (no implicit main-display target).
+- Video/camera/image/slide cues REQUIRE an output group (no implicit
+  main-display target) — EXCEPT D25 `CameraBody.sensorOnly`: a camera cue
+  running purely as a hand-gesture sensor draws to no output at all, so it
+  needs no group (`EnginePlayerProvider.resolveTargets` returns `[]` for it
+  without throwing, skipping the virtual-webcam/program-mirror extras too —
+  nothing draws, so nothing mirrors; Preflight and the cue-list warning icon
+  are exempted the same way). This is the ONE deliberate carve-out in the
+  rule; every other visual cue type still requires a group.
 - Slides replace each other on the same output; standalone image cues LAYER (like video).
 - Render layers 1-10 (zPosition on player layers/containers); default 5; ties
   break by ARM ORDER — that tie-break is what keeps slide crossfades working.
@@ -158,6 +165,17 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   preview + content + up to 2 hand emitters. Effects swap LIVE (no session
   restart; data connection disabled when idle). Mirroring pushed into the
   capture connection when supported, else flipped in the processor.
+- D25: gesture GO's warm-up hold is selectable per cue
+  (`CameraEffects.gestureHoldSeconds`, 0.25...5 s, default 1.0 — clamped on
+  init AND decode; `GestureHoldDetector.holdDuration` is now an init param,
+  not a fixed constant; cooldown stays fixed at 3 s). `CameraBody.sensorOnly`
+  runs the camera as a hand-gesture sensor ONLY: no window/host lease, no
+  preview/content layers, no container (`CameraCuePlayer` forces this at the
+  `arm` boundary regardless of what targets it's handed); fades, geometry
+  pushes, and attach/detach all no-op; segmentation/magicDust/chromaKey are
+  force-reduced off (`CameraCuePlayer.effectiveEffects`) since nothing ever
+  draws — gestureGo/goGesture/gestureHoldSeconds are untouched, since gesture
+  tracking is the entire point.
 - .pex (Particle Designer) emitters map onto CAEmitterLayer (PEXEmitter.swift);
   texture = base64 + gzip (header stripped, raw-DEFLATE via Compression);
   additive blend deliberately approximated with plain alpha.

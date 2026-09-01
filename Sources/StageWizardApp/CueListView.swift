@@ -464,12 +464,13 @@ struct CueRowView: View {
 
     // MARK: Helpers
 
-    /// Video/camera cues must have a (still existing) output group.
+    /// Video/camera cues must have a (still existing) output group. D25: a
+    /// sensor-only camera cue draws nowhere, so it never warns here.
     private func isOutputMissing(_ cue: Cue) -> Bool {
         let groupID: UUID??
         switch cue.body {
         case .video(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
-        case .camera(let body): groupID = body.display == nil ? .some(body.outputGroupID) : nil
+        case .camera(let body): groupID = (body.display == nil && !body.sensorOnly) ? .some(body.outputGroupID) : nil
         case .image(let body): groupID = .some(body.outputGroupID)
         case .text(let body): groupID = .some(body.outputGroupID)
         case .slide(let body): groupID = .some(body.outputGroupID)
