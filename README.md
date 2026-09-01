@@ -41,8 +41,10 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   tracking), with six bundled emitter presets, any Particle Designer `.pex`
   file, and a 0.5–10× particle-size dial. All on-device (Vision +
   CoreImage), nothing external at showtime. Experimental **gesture GO**:
-  hold an open palm to a running camera cue for one second and GO fires —
-  a performer mid-routine needs no keyboard.
+  hold a pose to a running camera cue for one second and GO fires — open
+  palm, closed fist, thumbs up, or both hands together, your pick per cue.
+  A performer mid-routine needs no keyboard, and the stage display can
+  show the hold-progress bar so you know the trigger is arming.
 - **Slide decks** — drop a PowerPoint (.pptx/.ppt) or PDF and it becomes a
   navigable deck: one group named after the file, one cue per slide, GO to
   advance, crossfade between slides, trailing clear cue. Decks are flattened
@@ -93,10 +95,17 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   dark phone page (huge GO, prev/next, double-tap STOP ALL, standing-by cue
   + notes) at a QR code you scan from the settings panel. All zero-config,
   zero-dependency, off by default, LAN-only.
-- **Stage display** — a fullscreen performer-facing confidence monitor on
-  any spare display: big clock, show timer, the standing-by cue huge, its
-  notes, and running cues with time remaining. Never a cue target; shows in
-  Show and Rehearsal modes.
+- **Stage display** — a performer-facing confidence monitor: fullscreen on
+  any spare display in Show mode (never over the operator's own screen —
+  it floats there instead, and ⌘⎋ always exits Show mode), a floating
+  resizable window in Rehearsal. Fully editable pane layout (drag, resize,
+  snap on a 16:9 canvas): clock, show timer, the standing-by cue huge, its
+  notes, running cues with time remaining, the gesture hold-progress bar —
+  and **live program panes** that mirror any number of video outputs
+  (16:9-locked, one decode, an extra layer, attach and detach mid-playback
+  like a video patchbay). Never a cue target. Any output group can also
+  become its own **floating resizable window** in every mode — a prompter
+  feed on the operator screen during a real show.
 - **Preflight** — one click (and automatically on entering Show mode) checks
   the whole cue list against the rig: missing media, unassigned or
   display-less output groups, missing camera permission, disconnected audio
@@ -176,7 +185,7 @@ AVFoundation, CoreMIDI, and Network.framework callback hops isolation
 immediately; the only off-main mutations are documented-thread-safe volume
 setters driven by the fade clock. Remote triggers (MIDI, OSC, web remote,
 gesture) all route through a single trigger bus into the same transport the
-keyboard uses. 333 unit and integration tests cover the model, sequencing
+keyboard uses. 500 unit and integration tests cover the model, sequencing
 semantics, the engines, the OSC/HTTP parsers, deck conversion, and
 full-stack playback.
 

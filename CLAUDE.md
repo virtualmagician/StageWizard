@@ -84,6 +84,28 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   level screenSaver−1 so real outputs cover it), `PreflightCheck`. Both
   network ports are per-show settings, off by default, unauthenticated by
   design (LAN-only; `NSLocalNetworkUsageDescription` lives in project.yml).
+- Stage display v2: pane-driven (normalized y-down rects, edited on a 16:9
+  snap canvas; program panes are per-output-group, 16:9-locked = h==w on
+  the reference canvas). Program mirroring = OutputWindowManager EXTERNAL
+  HOST registration (per-group target id = group UUID XOR 0x33 sentinel);
+  resolveTargets appends it at arm AND AppModel.syncMirrorAttachments
+  attaches/detaches RUNNING players live (MediaPlayback.attach/detachTarget,
+  second AVPlayerLayer on the same player, presentation-value opacity).
+  Paint order inside the window is explicit zPosition (panes 0, program
+  100, panic 1000) — AppKit reorders layer-backed sublayer arrays
+  asynchronously, insertSublayer(below:) is NOT reliable there. Fullscreen
+  NEVER covers the screen hosting the operator window (floats instead —
+  presentationStyle is the pure decision); ⌘⎋ (hardwired, monitor +
+  menu-item double path, works with nil/non-key window) always exits Show
+  mode. OutputGroup.floatingWindow routes a group to its preview window in
+  EVERY mode.
+- OSC feedback (StageWand contract): any sender heard <5 s is a subscriber
+  (/stagewand/ping = keepalive); new subscriber → full refresh on its own
+  UDP flow; /stagewizard/status/standingby|running|panic|showmode|window|
+  notes on change (10 Hz diff of the SAME snapshot the web remote serves),
+  /status/elapsed at 2 Hz while running (duration −1 = indefinite);
+  /stagewizard/cue/{n}/select stands by without firing; Bonjour
+  _stagewizard._udp. P3 fader mapping is an OPEN product decision.
 
 ## Semantics pinned by tests (don't "fix" these)
 
@@ -107,7 +129,9 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   playhead. rebaseMediaReferences (during save) records nothing.
 - Remote semantics: MIDI noteOn fires, noteOff never, CC only on the
   transition into ≥64 (held pedal can't machine-gun GO); gesture GO needs a
-  1 s continuous open palm, then a 3 s cooldown demanding a fresh hold, and
+  a 1 s continuous hold of the cue's chosen pose (openPalm | fist |
+  thumbsUp | handsTogether; thumbsUp suppresses fist; handsTogether needs
+  2 hands), then a 3 s cooldown demanding a fresh hold, and
   never fires in Edit mode; the web page carries no panic button (emergency
   stays physical). Panic is not a ShortcutAction — remotes reach it via
   TriggerRouter.routePanic() → transport.panic(), same as Esc.
