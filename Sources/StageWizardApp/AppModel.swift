@@ -315,10 +315,12 @@ final class AppModel {
     }
 
     /// The full OSC status snapshot — `currentRemoteStatusCore()` plus the
-    /// GO-sequence window (index/total/prev/next) that only OSC needs.
+    /// GO-sequence window (index/total/prev/next) and the D22 capped cue
+    /// list, both of which only OSC needs.
     private func currentOSCSnapshot() -> OSCStatusFeedback.Snapshot {
         let core = currentRemoteStatusCore()
-        let window = OSCStatusFeedback.windowInfo(goSequence: transport.goSequence, standingByID: transport.standingByCue?.id)
+        let goSequence = transport.goSequence
+        let window = OSCStatusFeedback.windowInfo(goSequence: goSequence, standingByID: transport.standingByCue?.id)
         return OSCStatusFeedback.Snapshot(
             standingByNumber: core.standingByNumber ?? "",
             standingByName: core.standingByName ?? "",
@@ -331,11 +333,12 @@ final class AppModel {
             prevNum: window.prevNum,
             prevName: window.prevName,
             nextNum: window.nextNum,
-            nextName: window.nextName
+            nextName: window.nextName,
+            cuelist: OSCStatusFeedback.cuelistEntries(goSequence: goSequence)
         )
     }
 
-    // MARK: - D21: OSC status feedback tick (10 Hz while OSC is enabled)
+    // MARK: - D21 (+D22): OSC status feedback tick (10 Hz while OSC is enabled)
 
     /// Feedback-tick state — never persisted, never observed by SwiftUI
     /// (hence `@ObservationIgnored`, mirroring `activityToken` above).
@@ -347,6 +350,8 @@ final class AppModel {
     /// Elapsed rides the same tick but only every 5th one (10 Hz / 5 = 2 Hz)
     /// — it always changes, so it can't ride the diffed snapshot above.
     private static let oscElapsedTickDivisor = 5
+    /// D22 liveness heartbeat divisor (10 Hz / 20 = every ~2s) lives on
+    /// `OSCStatusFeedback.heartbeatTickDivisor` — see `oscFeedbackTick`.
 
     /// Start the 10 Hz feedback loop — called from `applyOSCSettings`
     /// alongside `oscServer.start(port:)`, never on its own.
@@ -374,9 +379,14 @@ final class AppModel {
     }
 
     /// One tick: diff the current snapshot against the last-broadcast one
-    /// and send whatever changed; every 5th tick also sends
-    /// `/stagewizard/status/elapsed` for the most-recently-started RUNNING
-    /// instance. "Most-recently-started" = the LAST element of
+    /// and send whatever changed; every 20th tick (D22, ~2s at 10 Hz) also
+    /// sends a liveness heartbeat — a re-send of `/stagewizard/status/running`
+    /// regardless of change, so a quiet-but-alive host stays distinguishable
+    /// from a dead one — UNLESS this same tick's diff already sent a genuine
+    /// running-count change (no double-send; see
+    /// `OSCStatusFeedback.shouldSendHeartbeat`). Separately, every 5th tick
+    /// also sends `/stagewizard/status/elapsed` for the most-recently-started
+    /// RUNNING instance. "Most-recently-started" = the LAST element of
     /// `registry.instances` whose state is `.running` — instances are
     /// appended in fire order and never reordered (`ActiveCuesRegistry.add`),
     /// so the last `.running` entry is the most recently started one still
@@ -393,6 +403,12 @@ final class AppModel {
         }
 
         oscFeedbackTickCount += 1
+
+        let runningAlreadySent = changed.contains { $0.address == "/stagewizard/status/running" }
+        if OSCStatusFeedback.shouldSendHeartbeat(tickCount: oscFeedbackTickCount, runningAlreadySentThisTick: runningAlreadySent) {
+            oscServer.broadcast([OSCStatusFeedback.runningMessage(snapshot.runningCount)])
+        }
+
         guard oscFeedbackTickCount % Self.oscElapsedTickDivisor == 0 else { return }
         guard let running = transport.registry.instances.last(where: { $0.state == .running }) else { return }
         oscServer.broadcast([OSCStatusFeedback.elapsedMessage(elapsed: running.elapsed ?? 0, duration: running.duration)])

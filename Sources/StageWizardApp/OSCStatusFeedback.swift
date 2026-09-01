@@ -1,12 +1,14 @@
 import Foundation
 
-/// D21: pure OSC status feedback logic — turns show/transport state into the
-/// exact outbound wire messages a StageWand hardware controller expects
-/// (see CLAUDE.md's D21 wire contract). No I/O, no actor isolation: every
-/// entry point here is a `static func` over value types, so it's directly
-/// unit-testable with no server, socket, or AppModel involved. AppModel owns
-/// the ACTUAL polling (a 10 Hz MainActor tick — see `AppModel.oscFeedbackTick`)
-/// and calls into this type to decide what changed.
+/// D21 (+D22): pure OSC status feedback logic — turns show/transport state
+/// into the exact outbound wire messages a StageWand hardware controller
+/// expects (see CLAUDE.md's StageWand wire-contract bullet). No I/O, no
+/// actor isolation: every entry point here is a `static func` over value
+/// types, so it's directly unit-testable with no server, socket, or
+/// AppModel involved. AppModel owns the ACTUAL polling (a 10 Hz MainActor
+/// tick — see `AppModel.oscFeedbackTick`) and calls into this type to decide
+/// what changed. D22 added the liveness heartbeat (`shouldSendHeartbeat`)
+/// and the chunked full cue-list dump (`cuelistEntries`/`cuelistMessages`).
 enum OSCStatusFeedback {
     /// Every P1+P2 status field EXCEPT elapsed/duration, which ride a
     /// separate faster tick and are deliberately excluded here (see
@@ -25,6 +27,16 @@ enum OSCStatusFeedback {
         var prevName: String
         var nextNum: String
         var nextName: String
+        /// D22: the GO sequence, capped to `maxCuelistEntries` — see
+        /// `cuelistEntries`/`cuelistMessages` below.
+        var cuelist: [CueListEntry]
+    }
+
+    /// D22: one row of the chunked cue-list dump — a cue's number + display
+    /// name, nothing else (the wand only needs enough to label a button).
+    struct CueListEntry: Equatable {
+        var number: String
+        var name: String
     }
 
     /// Neighbors of the standing-by cue within the GO sequence — pure helper
@@ -74,9 +86,7 @@ enum OSCStatusFeedback {
             ]))
         }
         if old == nil || old!.runningCount != new.runningCount {
-            messages.append(OSCMessage(address: "/stagewizard/status/running", arguments: [
-                .int32(Int32(new.runningCount)),
-            ]))
+            messages.append(runningMessage(new.runningCount))
         }
         if old == nil || old!.panic != new.panic {
             messages.append(OSCMessage(address: "/stagewizard/status/panic", arguments: [
@@ -103,7 +113,36 @@ enum OSCStatusFeedback {
                 .string(new.notes),
             ]))
         }
+        // D22: the chunked cue-list burst rides the SAME diff as everything
+        // else above (it's just another snapshot field), which is what
+        // guarantees it lands AFTER the status messages in both the
+        // on-subscribe full refresh (`old: nil`) and a live change — the
+        // fixed append order above IS the ordering contract.
+        if old == nil || old!.cuelist != new.cuelist {
+            messages.append(contentsOf: cuelistMessages(new.cuelist))
+        }
         return messages
+    }
+
+    /// The `/stagewizard/status/running` message — factored out so the D22
+    /// liveness heartbeat (`AppModel.oscFeedbackTick`) sends the exact same
+    /// wire shape as a genuine change, without duplicating the address string.
+    static func runningMessage(_ count: Int) -> OSCMessage {
+        OSCMessage(address: "/stagewizard/status/running", arguments: [.int32(Int32(count))])
+    }
+
+    /// D22: liveness heartbeat — every 20th feedback tick (10 Hz ÷ 20 = one
+    /// every ~2s) is a heartbeat tick, REGARDLESS of whether anything
+    /// changed; this is what lets a quiet-but-alive host stay distinguishable
+    /// from a dead one (the wand's own liveness grace window is 10s). Pure
+    /// tick-index arithmetic plus the suppress-on-change rule: skip the
+    /// heartbeat when this exact tick already emitted a genuine
+    /// `/status/running` change via `changedMessages`, so a subscriber never
+    /// sees the address twice in one tick.
+    static let heartbeatTickDivisor = 20
+
+    static func shouldSendHeartbeat(tickCount: Int, runningAlreadySentThisTick: Bool) -> Bool {
+        tickCount % heartbeatTickDivisor == 0 && !runningAlreadySentThisTick
     }
 
     /// The `/stagewizard/status/elapsed` message — computed OUTSIDE the
@@ -115,5 +154,43 @@ enum OSCStatusFeedback {
         OSCMessage(address: "/stagewizard/status/elapsed", arguments: [
             .float32(Float(elapsed)), .float32(Float(duration ?? -1)),
         ])
+    }
+
+    // MARK: - D22: chunked full cue-list dump
+
+    /// Hard cap on how many cues ride the `/stagewizard/cuelist/*` burst —
+    /// the wire contract's begin/end self-consistency (they share ONE count)
+    /// needs a fixed upper bound, and it keeps the burst's datagram count
+    /// bounded regardless of show size.
+    static let maxCuelistEntries = 64
+
+    /// GO sequence → capped (number, name) pairs, in order — the exact
+    /// content `cuelistMessages` turns into the begin/item*/end burst. Pure
+    /// so it's testable without a real TransportController (mirrors
+    /// `windowInfo` above). Name matches `windowInfo`'s: `displayName`.
+    static func cuelistEntries(goSequence: [Cue]) -> [CueListEntry] {
+        goSequence.prefix(maxCuelistEntries).map { CueListEntry(number: $0.number, name: $0.displayName) }
+    }
+
+    /// The `/stagewizard/cuelist/begin|item|end` burst for `entries`: one
+    /// `begin` (count), one `item` per entry (0-based index, number, name),
+    /// one `end` (same count) — each its own message/datagram, in this
+    /// order. Caps to `maxCuelistEntries` defensively even if `entries`
+    /// arrives larger than that (e.g. called directly, bypassing
+    /// `cuelistEntries`'s own cap), so `count` always matches the number of
+    /// `item` messages actually produced — the wand's begin→end
+    /// double-buffer stays self-consistent no matter the caller.
+    static func cuelistMessages(_ entries: [CueListEntry]) -> [OSCMessage] {
+        let capped = entries.count > maxCuelistEntries ? Array(entries.prefix(maxCuelistEntries)) : entries
+        var messages: [OSCMessage] = [
+            OSCMessage(address: "/stagewizard/cuelist/begin", arguments: [.int32(Int32(capped.count))]),
+        ]
+        for (index, entry) in capped.enumerated() {
+            messages.append(OSCMessage(address: "/stagewizard/cuelist/item", arguments: [
+                .int32(Int32(index)), .string(entry.number), .string(entry.name),
+            ]))
+        }
+        messages.append(OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(Int32(capped.count))]))
+        return messages
     }
 }

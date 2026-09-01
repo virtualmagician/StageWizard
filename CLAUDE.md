@@ -105,7 +105,14 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   notes on change (10 Hz diff of the SAME snapshot the web remote serves),
   /status/elapsed at 2 Hz while running (duration −1 = indefinite);
   /stagewizard/cue/{n}/select stands by without firing; Bonjour
-  _stagewizard._udp. P3 fader mapping is an OPEN product decision.
+  _stagewizard._udp. P3 faders were SCRAPPED (2026-09-01): the wand's
+  fourth page is a transport page using the existing /toggle /stopall
+  /panic verbs — never re-propose /stagewizard/level.
+  D22: /status/running also re-sends unconditionally every ~2 Hz (tick %
+  20) as a liveness heartbeat, suppressed on ticks that already sent a
+  genuine change. D22: /stagewizard/cuelist/begin|item|end dumps the GO
+  sequence (number, name), capped at 64, on subscribe (after the status
+  messages) and whenever it changes.
 
 ## Semantics pinned by tests (don't "fix" these)
 

@@ -90,10 +90,11 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   `/panic`, `/cue/{number}/fire`, `/cue/{number}/select`) — which also
   advertises itself over Bonjour (`_stagewizard._udp`) and pushes live
   status feedback (standing-by cue, running count, panic, window, notes,
-  elapsed) to any sender it's heard from recently, so a hardware
-  controller never has to poll — and a **web remote** — the app serves a
-  dark phone page (huge GO, prev/next, double-tap STOP ALL, standing-by cue
-  + notes) at a QR code you scan from the settings panel. All zero-config,
+  elapsed, full cue list, a liveness heartbeat) to any sender it's heard
+  from recently, so a hardware controller never has to poll — and a
+  **web remote** — the app serves a dark phone page (huge GO, prev/next,
+  double-tap STOP ALL, standing-by cue + notes) at a QR code you scan
+  from the settings panel. All zero-config,
   zero-dependency, off by default, LAN-only.
 - **Stage display** — a performer-facing confidence monitor: fullscreen on
   any spare display in Show mode (never over the operator's own screen —

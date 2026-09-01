@@ -129,21 +129,27 @@ final class OSCFeedbackTests: XCTestCase {
         standingByNumber: String = "3", standingByName: String = "Blackout",
         notes: String = "", runningCount: Int = 0, panic: Bool = false, showMode: Bool = false,
         windowIndex: Int = 2, windowTotal: Int = 5,
-        prevNum: String = "2", prevName: String = "Fade up", nextNum: String = "4", nextName: String = "Rain"
+        prevNum: String = "2", prevName: String = "Fade up", nextNum: String = "4", nextName: String = "Rain",
+        cuelist: [OSCStatusFeedback.CueListEntry] = []
     ) -> OSCStatusFeedback.Snapshot {
         OSCStatusFeedback.Snapshot(
             standingByNumber: standingByNumber, standingByName: standingByName, notes: notes,
             runningCount: runningCount, panic: panic, showMode: showMode,
             windowIndex: windowIndex, windowTotal: windowTotal,
-            prevNum: prevNum, prevName: prevName, nextNum: nextNum, nextName: nextName
+            prevNum: prevNum, prevName: prevName, nextNum: nextNum, nextName: nextName,
+            cuelist: cuelist
         )
     }
 
     func testNilOldSnapshotSendsEveryAddress() {
+        // Default snapshot() has an EMPTY cuelist, so the D22 burst still
+        // fires (old == nil means "everything") but degenerates to just
+        // begin(0)/end(0) — no item messages.
         let messages = OSCStatusFeedback.changedMessages(old: nil, new: snapshot())
         XCTAssertEqual(Set(messages.map(\.address)), [
             "/stagewizard/status/standingby", "/stagewizard/status/running", "/stagewizard/status/panic",
             "/stagewizard/status/showmode", "/stagewizard/status/window", "/stagewizard/status/notes",
+            "/stagewizard/cuelist/begin", "/stagewizard/cuelist/end",
         ])
     }
 
@@ -193,6 +199,151 @@ final class OSCFeedbackTests: XCTestCase {
         XCTAssertEqual(
             Set(OSCStatusFeedback.changedMessages(old: old, new: new).map(\.address)),
             ["/stagewizard/status/notes", "/stagewizard/status/showmode"]
+        )
+    }
+
+    // MARK: - D22: liveness heartbeat (OSCStatusFeedback.shouldSendHeartbeat)
+    //
+    // Pure tick-index arithmetic — no AppModel, no feedback loop. AppModel's
+    // own `oscFeedbackTick` just calls this with its running tick counter and
+    // whether THIS tick's diff already emitted a genuine running-count change.
+
+    func testHeartbeatFiresOnEveryTwentiethTick() {
+        for tick in [20, 40, 60, 100] {
+            XCTAssertTrue(
+                OSCStatusFeedback.shouldSendHeartbeat(tickCount: tick, runningAlreadySentThisTick: false),
+                "tick \(tick) should be a heartbeat tick"
+            )
+        }
+    }
+
+    func testHeartbeatDoesNotFireOnNonHeartbeatTicks() {
+        for tick in [1, 5, 10, 15, 19, 21, 39] {
+            XCTAssertFalse(
+                OSCStatusFeedback.shouldSendHeartbeat(tickCount: tick, runningAlreadySentThisTick: false),
+                "tick \(tick) is not a multiple of the heartbeat divisor"
+            )
+        }
+    }
+
+    func testHeartbeatSuppressedWhenRunningAlreadySentThisTick() {
+        XCTAssertFalse(
+            OSCStatusFeedback.shouldSendHeartbeat(tickCount: 20, runningAlreadySentThisTick: true),
+            "a genuine running-count change this tick must not be doubled by the heartbeat"
+        )
+    }
+
+    func testHeartbeatDivisorIsTwentyTicksPerTheWireContract() {
+        // 10 Hz feedback tick / 20 = one heartbeat every ~2s, per the D22 ask.
+        XCTAssertEqual(OSCStatusFeedback.heartbeatTickDivisor, 20)
+    }
+
+    // MARK: - D22: OSCStatusFeedback.cuelistMessages (pure burst construction)
+
+    func testCuelistMessagesEmptyListSendsBeginAndEndWithZeroCountNoItems() {
+        let messages = OSCStatusFeedback.cuelistMessages([])
+        XCTAssertEqual(messages, [
+            OSCMessage(address: "/stagewizard/cuelist/begin", arguments: [.int32(0)]),
+            OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(0)]),
+        ])
+    }
+
+    func testCuelistMessagesThreeCuesOrderedWithZeroBasedIndices() {
+        let entries = [
+            OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout"),
+            OSCStatusFeedback.CueListEntry(number: "2", name: "Fade up"),
+            OSCStatusFeedback.CueListEntry(number: "3", name: "Rain"),
+        ]
+        let messages = OSCStatusFeedback.cuelistMessages(entries)
+        XCTAssertEqual(messages, [
+            OSCMessage(address: "/stagewizard/cuelist/begin", arguments: [.int32(3)]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(0), .string("1"), .string("Blackout")]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(1), .string("2"), .string("Fade up")]),
+            OSCMessage(address: "/stagewizard/cuelist/item", arguments: [.int32(2), .string("3"), .string("Rain")]),
+            OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(3)]),
+        ])
+    }
+
+    func testCuelistMessagesCapsAtSixtyFourEntries() {
+        let entries = (0..<70).map { OSCStatusFeedback.CueListEntry(number: "\($0 + 1)", name: "Cue \($0 + 1)") }
+        let messages = OSCStatusFeedback.cuelistMessages(entries)
+
+        XCTAssertEqual(messages.first, OSCMessage(address: "/stagewizard/cuelist/begin", arguments: [.int32(64)]))
+        XCTAssertEqual(messages.last, OSCMessage(address: "/stagewizard/cuelist/end", arguments: [.int32(64)]))
+
+        let items = messages.filter { $0.address == "/stagewizard/cuelist/item" }
+        XCTAssertEqual(items.count, 64, "must truncate to the FIRST 64 cues")
+        XCTAssertEqual(items.first?.arguments, [.int32(0), .string("1"), .string("Cue 1")])
+        XCTAssertEqual(items.last?.arguments, [.int32(63), .string("64"), .string("Cue 64")], "the 65th+ cue must never appear")
+    }
+
+    // MARK: - D22: OSCStatusFeedback.cuelistEntries (GO sequence → capped entries, pure)
+
+    func testCuelistEntriesMapsNumberAndDisplayName() {
+        let a = Cue(number: "1", name: "Blackout", body: .audio(AudioBody(media: MediaReference(absolutePath: "/fake/1.wav"))))
+        let b = cue("2")
+        let entries = OSCStatusFeedback.cuelistEntries(goSequence: [a, b])
+        XCTAssertEqual(entries, [
+            OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout"),
+            OSCStatusFeedback.CueListEntry(number: "2", name: b.displayName),
+        ])
+    }
+
+    func testCuelistEntriesCapsAtSixtyFour() {
+        let cues = (0..<70).map { cue("\($0 + 1)") }
+        XCTAssertEqual(OSCStatusFeedback.cuelistEntries(goSequence: cues).count, 64)
+    }
+
+    // MARK: - D22: Snapshot diff — the cue-list burst rides changedMessages
+
+    func testCuelistRenameTriggersBurst() {
+        let old = snapshot(cuelist: [OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout")])
+        let new = snapshot(cuelist: [OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout (v2)")])
+        XCTAssertTrue(OSCStatusFeedback.changedMessages(old: old, new: new).contains { $0.address == "/stagewizard/cuelist/begin" })
+    }
+
+    func testCuelistAddTriggersBurst() {
+        let old = snapshot(cuelist: [OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout")])
+        let new = snapshot(cuelist: [
+            OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout"),
+            OSCStatusFeedback.CueListEntry(number: "2", name: "Rain"),
+        ])
+        XCTAssertTrue(OSCStatusFeedback.changedMessages(old: old, new: new).contains { $0.address == "/stagewizard/cuelist/begin" })
+    }
+
+    func testCuelistReorderTriggersBurst() {
+        let a = OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout")
+        let b = OSCStatusFeedback.CueListEntry(number: "2", name: "Rain")
+        let old = snapshot(cuelist: [a, b])
+        let new = snapshot(cuelist: [b, a])
+        XCTAssertTrue(OSCStatusFeedback.changedMessages(old: old, new: new).contains { $0.address == "/stagewizard/cuelist/begin" })
+    }
+
+    func testUnchangedCuelistSendsNoBurst() {
+        let list = [OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout")]
+        let s = snapshot(cuelist: list)
+        XCTAssertTrue(OSCStatusFeedback.changedMessages(old: s, new: s).isEmpty)
+    }
+
+    func testFullRefreshIncludesCuelistBurstAfterStatusMessages() {
+        let list = [
+            OSCStatusFeedback.CueListEntry(number: "1", name: "Blackout"),
+            OSCStatusFeedback.CueListEntry(number: "2", name: "Rain"),
+        ]
+        let messages = OSCStatusFeedback.changedMessages(old: nil, new: snapshot(cuelist: list))
+
+        let statusAddresses = [
+            "/stagewizard/status/standingby", "/stagewizard/status/running", "/stagewizard/status/panic",
+            "/stagewizard/status/showmode", "/stagewizard/status/window", "/stagewizard/status/notes",
+        ]
+        XCTAssertEqual(
+            Array(messages.prefix(6).map(\.address)), statusAddresses,
+            "status messages must come first, in their fixed order"
+        )
+        XCTAssertEqual(
+            Array(messages.suffix(from: 6)).map(\.address),
+            ["/stagewizard/cuelist/begin", "/stagewizard/cuelist/item", "/stagewizard/cuelist/item", "/stagewizard/cuelist/end"],
+            "the D22 burst must follow every status message, in begin -> items -> end order"
         )
     }
 
