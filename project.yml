@@ -61,6 +61,7 @@ targets:
         NSCameraUsageDescription: StageWizard shows live camera input on stage displays through Camera cues.
         NSAppleEventsUsageDescription: StageWizard asks PowerPoint or Keynote to export presentation decks so slides can become cues.
         NSLocalNetworkUsageDescription: StageWizard listens for OSC and web-remote commands from other devices on your local network.
+        NSBluetoothAlwaysUsageDescription: StageWizard connects to StageWand hardware controllers over Bluetooth when show Wi-Fi is unavailable.
         CFBundleShortVersionString: "1.7.0"
         CFBundleVersion: "11"
         LSApplicationCategoryType: public.app-category.entertainment

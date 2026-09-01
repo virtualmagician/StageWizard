@@ -72,12 +72,17 @@ struct RemoteSettingsTab: View {
                 Text("Addresses: /stagewizard/go, /stopall, /next, /prev, /toggle, /panic, /cue/{number}/fire, /cue/{number}/select")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Sends status feedback to any sender (StageWand): /stagewizard/status/… and /stagewizard/cuelist/…, plus a liveness heartbeat. Advertised on the network as _stagewizard._udp.")
+                Text("Sends status feedback to any sender (StageWand): /stagewizard/status/… and /stagewizard/cuelist/…, plus a liveness heartbeat. Advertised on the network as _stagewizard._udp. Also reachable over Bluetooth when a StageWand advertises its fallback link (show Wi-Fi down).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Unauthenticated — enable only on a trusted show network.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if app.bleWandLink.connectedWandCount > 0 {
+                    Text("BLE: \(app.bleWandLink.connectedWandCount) wand\(app.bleWandLink.connectedWandCount == 1 ? "" : "s") connected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Web Remote") {

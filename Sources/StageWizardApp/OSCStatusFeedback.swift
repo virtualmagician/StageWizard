@@ -206,3 +206,19 @@ enum OSCStatusFeedback {
         return messages
     }
 }
+
+/// D28: fans one batch of outbound OSC feedback messages to every live
+/// sink — today `OSCServer.broadcast` (UDP) and `BLEWandLink.broadcast`
+/// (the StageWand BLE fallback tunnel), called with the exact same
+/// `[OSCMessage]` at every one of `AppModel.oscFeedbackTick`'s three send
+/// sites (diffed change, liveness heartbeat, elapsed). A tiny, pure seam —
+/// an array of plain closures rather than a reference to either concrete
+/// sink — so "every sink gets the same messages" is directly testable with
+/// mock closures, no real server/socket/CoreBluetooth involved (see
+/// BLETests.swift). No I/O, no actor isolation of its own.
+enum OSCFeedbackFanout {
+    static func broadcast(_ messages: [OSCMessage], to sinks: [([OSCMessage]) -> Void]) {
+        guard !messages.isEmpty else { return }
+        for sink in sinks { sink(messages) }
+    }
+}

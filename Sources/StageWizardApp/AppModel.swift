@@ -17,6 +17,11 @@ final class AppModel {
     let midiController = MIDIController()
     /// UDP OSC listener — TriggerRouter's second remote-control client.
     let oscServer = OSCServer()
+    /// D28: BLE fallback tunnel for the StageWand hardware remote — carries
+    /// the exact same OSC contract as `oscServer` when a wand's Wi-Fi link
+    /// drops. Lifecycle rides `oscEnabled` (see `applyOSCSettings`), not a
+    /// setting of its own.
+    let bleWandLink = BLEWandLink()
     /// Web remote HTTP server (phone GO page) — TriggerRouter's third
     /// remote-control client.
     let webRemoteServer = WebRemoteServer()
@@ -241,13 +246,7 @@ final class AppModel {
         }
 
         oscServer.onCommand = { [weak self] command in
-            guard let self else { return }
-            switch command {
-            case .action(let action): self.triggerRouter.route(action)
-            case .panic: self.triggerRouter.routePanic()
-            case .fireCue(let number): self.triggerRouter.route(cueNumber: number)
-            case .selectCue(let number): self.triggerRouter.route(selectCueNumber: number)
-            }
+            self?.handleOSCCommand(command)
         }
         // D21: a brand-new (or pruned-and-returning) subscriber gets the
         // FULL current status feed immediately, on its connection alone —
@@ -255,6 +254,28 @@ final class AppModel {
         // (which tracks what was last BROADCAST to everyone, not what any
         // one subscriber has actually received).
         oscServer.fullRefreshProvider = { [weak self] in
+            guard let self else { return [] }
+            return OSCStatusFeedback.changedMessages(old: nil, new: self.currentOSCSnapshot())
+        }
+
+        // D28: the BLE tunnel's inbound notifies reassemble into the same
+        // `OSCMessage` shape a UDP datagram parses to — resolve each via the
+        // SAME pure routing table (`OSCServer.command(for:)`) and dispatch
+        // through the SAME handler as the UDP path, so a BLE-connected wand
+        // is indistinguishable from a UDP one once past the wire. Unresolved
+        // addresses (including `/stagewand/ping`) are silently dropped here,
+        // exactly like an unrecognized UDP datagram.
+        bleWandLink.onInboundMessages = { [weak self] messages in
+            guard let self else { return }
+            for message in messages {
+                guard let command = OSCServer.command(for: message.address) else { continue }
+                self.handleOSCCommand(command)
+            }
+        }
+        // Connection IS the subscription for BLE (no 5 s expiry) — on
+        // connect + notify-subscribe, BLEWandLink sends this exact burst to
+        // that one wand alone, mirroring `oscServer.fullRefreshProvider`.
+        bleWandLink.fullRefreshProvider = { [weak self] in
             guard let self else { return [] }
             return OSCStatusFeedback.changedMessages(old: nil, new: self.currentOSCSnapshot())
         }
@@ -282,6 +303,22 @@ final class AppModel {
                 showMode: core.showMode,
                 panicking: core.panicking
             )
+        }
+    }
+
+    /// D21 (+D28): the ONE inbound-command dispatch every OSC-shaped
+    /// remote-control transport shares — UDP (`oscServer.onCommand`) and
+    /// the BLE StageWand tunnel (`bleWandLink.onInboundMessages`, resolved
+    /// through the same `OSCServer.command(for:)` table) both funnel here,
+    /// so a wand talking over BLE behaves identically to one talking over
+    /// UDP. Everything still routes through TriggerRouter — this is not a
+    /// second path around it, just the shared bit of glue above it.
+    private func handleOSCCommand(_ command: OSCCommand) {
+        switch command {
+        case .action(let action): triggerRouter.route(action)
+        case .panic: triggerRouter.routePanic()
+        case .fireCue(let number): triggerRouter.route(cueNumber: number)
+        case .selectCue(let number): triggerRouter.route(selectCueNumber: number)
         }
     }
 
@@ -399,19 +436,28 @@ final class AppModel {
         let changed = OSCStatusFeedback.changedMessages(old: lastOSCSnapshot, new: snapshot)
         lastOSCSnapshot = snapshot
         if !changed.isEmpty {
-            oscServer.broadcast(changed)
+            broadcastOSCFeedback(changed)
         }
 
         oscFeedbackTickCount += 1
 
         let runningAlreadySent = changed.contains { $0.address == "/stagewizard/status/running" }
         if OSCStatusFeedback.shouldSendHeartbeat(tickCount: oscFeedbackTickCount, runningAlreadySentThisTick: runningAlreadySent) {
-            oscServer.broadcast([OSCStatusFeedback.runningMessage(snapshot.runningCount)])
+            broadcastOSCFeedback([OSCStatusFeedback.runningMessage(snapshot.runningCount)])
         }
 
         guard oscFeedbackTickCount % Self.oscElapsedTickDivisor == 0 else { return }
         guard let running = transport.registry.instances.last(where: { $0.state == .running }) else { return }
-        oscServer.broadcast([OSCStatusFeedback.elapsedMessage(elapsed: running.elapsed ?? 0, duration: running.duration)])
+        broadcastOSCFeedback([OSCStatusFeedback.elapsedMessage(elapsed: running.elapsed ?? 0, duration: running.duration)])
+    }
+
+    /// D28: the one place outbound OSC feedback actually goes out — fans
+    /// every message to both live sinks (UDP `oscServer` + the BLE
+    /// `bleWandLink` StageWand tunnel) via the pure `OSCFeedbackFanout`
+    /// seam, so `oscFeedbackTick`'s three send sites (diffed change,
+    /// heartbeat, elapsed) never have to know how many transports exist.
+    private func broadcastOSCFeedback(_ messages: [OSCMessage]) {
+        OSCFeedbackFanout.broadcast(messages, to: [oscServer.broadcast, bleWandLink.broadcast])
     }
 
     private func wireEngines(provider: EnginePlayerProvider) {
@@ -631,12 +677,18 @@ final class AppModel {
     /// no-op when the listener isn't running. D21: the feedback tick's
     /// lifecycle is tied 1:1 to the listener's — it has nothing to send
     /// without a live listener, and a port rebind should never leave a
-    /// stale tick broadcasting into a dead server.
+    /// stale tick broadcasting into a dead server. D28: `bleWandLink` rides
+    /// the exact same lifecycle — it has no port of its own, so a plain
+    /// port edit also bounces the BLE scan/connections; a brief reconnect
+    /// blip on a rare admin action is an acceptable trade for one lifecycle
+    /// instead of two.
     private func applyOSCSettings() {
         oscServer.stop()
+        bleWandLink.stop()
         stopOSCFeedback()
         guard document.show.settings.oscEnabled else { return }
         oscServer.start(port: document.show.settings.oscPort)
+        bleWandLink.start()
         startOSCFeedback()
     }
 

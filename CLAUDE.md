@@ -115,6 +115,18 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   whenever it changes; item args are (i index, s number, s name,
   s colorTag — verbatim, empty when untagged, OPTIONAL trailing arg old
   wands ignore; a tag change re-bursts).
+  D28: BLE fallback tunnel (BLEWandLink.swift) — when a wand's Wi-Fi dies it
+  advertises service `8B0F4F44-5A5B-4EC1-A0E9-77616E640001` (write char
+  `…0002`, notify char `…0003`); the SAME OSC bytes UDP sends/receives are
+  framed (u16 BE length prefix, ≤512 B payload, reassembled — see
+  `FrameReassembler`) and tunneled symmetrically: host writes feedback to
+  `…0002`, host receives commands via `…0003` notifies (the wand doc's own
+  "commands"/"feedback" column labels are inverted relative to this — GATT
+  only allows writing TO 0002 and notifying FROM 0003). Rides `oscEnabled`,
+  no setting of its own; connection IS the subscription (no 5 s expiry) —
+  connect + notify-subscribe triggers the same full-refresh burst a new UDP
+  subscriber gets. Standing scan + unconditional reconnect on every
+  disconnect for as long as OSC is enabled.
 
 ## Semantics pinned by tests (don't "fix" these)
 
