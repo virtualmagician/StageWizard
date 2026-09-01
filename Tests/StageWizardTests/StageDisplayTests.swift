@@ -1073,6 +1073,42 @@ final class StageDisplayTests: XCTestCase {
         XCTAssertFalse(controller.paneHasContent(groupID: groupID), "content removed again")
     }
 
+    // MARK: - D23: StageDisplayTally — the multiview tally-border decision
+
+    func testTallyProgramStateIsLiveWhenPaneHasContent() {
+        XCTAssertEqual(StageDisplayTally.program(hasContent: true), .live)
+    }
+
+    func testTallyProgramStateIsNeutralWhenPaneHasNoContent() {
+        XCTAssertEqual(StageDisplayTally.program(hasContent: false), .neutral)
+    }
+
+    func testTallyStandingByStateIsStandbyWhenACueIsArmed() {
+        XCTAssertEqual(StageDisplayTally.standingBy(hasStandingByCue: true), .standby)
+    }
+
+    func testTallyStandingByStateIsNeutralWhenNothingIsArmed() {
+        // Covers BOTH idle cases the D23 spec calls out — "nothing standing
+        // by" and "past end of show" — since `TransportController.
+        // standingByCue` already reports `nil` for both (pinned by
+        // `testIsPlayheadPastEndTrueAfterGoingPastTheLastCue` above), a
+        // caller only ever has one boolean to pass here either way.
+        XCTAssertEqual(StageDisplayTally.standingBy(hasStandingByCue: false), .neutral)
+    }
+
+    func testTallyBorderWidthIsThickerThanNeutralForLiveAndStandby() {
+        XCTAssertEqual(StageDisplayTally.neutral.borderWidth, 1)
+        XCTAssertEqual(StageDisplayTally.live.borderWidth, 2)
+        XCTAssertEqual(StageDisplayTally.standby.borderWidth, 2)
+    }
+
+    func testTallyBorderColorsMapToTheAppsExistingSignalPalette() {
+        XCTAssertEqual(StageDisplayTally.live.borderColor, Theme.panic, "on-air red reuses the app's existing panic red")
+        XCTAssertEqual(StageDisplayTally.standby.borderColor, Theme.standby, "standing-by green reuses the app's existing standby green")
+        XCTAssertNotEqual(StageDisplayTally.neutral.borderColor, Theme.panic)
+        XCTAssertNotEqual(StageDisplayTally.neutral.borderColor, Theme.standby)
+    }
+
     // MARK: - D20: StageDisplayPane.clamped(_:lockToSquare:) — the 16:9 program-pane lock
 
     func testClampedLocksHeightToWidthWhenRequested() {

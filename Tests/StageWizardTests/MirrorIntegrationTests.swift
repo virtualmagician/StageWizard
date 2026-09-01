@@ -175,13 +175,19 @@ final class MirrorIntegrationTests: XCTestCase {
 
         let containerLayer = try XCTUnwrap(controller.debugContainerLayer, "the real window's container must be layer-backed")
         let sublayers = try XCTUnwrap(containerLayer.sublayers, "AppKit must have synced its own subview layers by now")
-        XCTAssertEqual(sublayers.count, 3, "content (ordinary panes) + program + panic, exactly")
+        // D23: a fourth sibling joined the stack — the program pane's
+        // above-mirror "chrome" (tally border + always-visible group-name
+        // label), painted at `programOverlayZPosition` strictly between the
+        // mirrored content and PANIC. See `StageDisplayController.ProgramOverlay`.
+        XCTAssertEqual(sublayers.count, 4, "content (ordinary panes) + program + D23 chrome overlay + panic, exactly")
 
         let panicLayers = sublayers.filter { $0.zPosition == StageDisplayController.panicLayerZPosition }
         let programLayers = sublayers.filter { $0.zPosition == StageDisplayController.programLayerZPosition }
+        let overlayLayers = sublayers.filter { $0.zPosition == StageDisplayController.programOverlayZPosition }
         let contentLayers = sublayers.filter { $0.zPosition == 0 }
         XCTAssertEqual(panicLayers.count, 1, "exactly one layer at the PANIC zPosition (1000)")
         XCTAssertEqual(programLayers.count, 1, "exactly one layer at the PROGRAM zPosition (100)")
+        XCTAssertEqual(overlayLayers.count, 1, "exactly one D23 chrome-overlay layer at zPosition 200")
         XCTAssertEqual(contentLayers.count, 1, "exactly one layer (the ordinary panes' content view) at the default zPosition (0)")
 
         // The whole point of the fix: effective PAINT order (by zPosition,
@@ -191,12 +197,16 @@ final class MirrorIntegrationTests: XCTestCase {
         // pre-fix, the array itself comes out [program, content, panic],
         // which — with everything at the same default zPosition — paints
         // PROGRAM first and CONTENT's opaque black straight on top of it).
+        // D23 extends the same invariant one layer further: the chrome
+        // overlay must paint above the mirrored content too, or its tally
+        // border/label would be invisible under live video.
         let paintOrder = sublayers.enumerated()
             .sorted { a, b in a.element.zPosition == b.element.zPosition ? a.offset < b.offset : a.element.zPosition < b.element.zPosition }
             .map(\.element)
         XCTAssertTrue(paintOrder[0] === contentLayers[0], "content paints first (bottom)")
-        XCTAssertTrue(paintOrder[1] === programLayers[0], "program paints second — above content, below panic")
-        XCTAssertTrue(paintOrder[2] === panicLayers[0], "panic paints last (top) — always wins")
+        XCTAssertTrue(paintOrder[1] === programLayers[0], "program paints second — above content, below the chrome overlay")
+        XCTAssertTrue(paintOrder[2] === overlayLayers[0], "chrome overlay paints third — above the mirrored content, below panic")
+        XCTAssertTrue(paintOrder[3] === panicLayers[0], "panic paints last (top) — always wins")
     }
 
     // MARK: - D20: mirrored content tracks program-pane frame changes (the scaling bug)

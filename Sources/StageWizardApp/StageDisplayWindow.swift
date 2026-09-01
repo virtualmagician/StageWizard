@@ -103,6 +103,16 @@ final class StageDisplayController {
     /// content's layer, inserted directly BELOW the panic-overlay layer so
     /// PANIC always covers live program content too.
     private var programHostLayers: [UUID: CALayer] = [:]
+    /// D23: one live "chrome" overlay PER MIRRORED GROUP, sibling of that
+    /// group's `programHostLayers` entry — the tally border + always-visible
+    /// group-name label, painted directly ABOVE the mirrored content
+    /// (`programOverlayZPosition`, between `programLayerZPosition` and
+    /// `panicLayerZPosition`) so both stay visible over live video. Kept
+    /// completely separate from `programHostLayers` — a child of the HOST
+    /// layer would corrupt `paneHasContent`'s "any sublayer at all" check
+    /// and the D19/D20 tests that pin the host's own `sublayers` contents —
+    /// see `ProgramOverlay`'s doc below.
+    private var programOverlays: [UUID: ProgramOverlay] = [:]
     /// The always-present (usually invisible) panic-overlay layer, captured
     /// at window-creation time so program layers can be inserted below it.
     private weak var panicLayer: CALayer?
@@ -140,6 +150,20 @@ final class StageDisplayController {
     /// `false`, same as a registered-but-empty one.
     func paneHasContent(groupID: UUID) -> Bool {
         programHostLayers[groupID]?.sublayers?.isEmpty == false
+    }
+
+    /// D23: refresh one program pane's above-mirror chrome — tally border +
+    /// group-name label — to match its current live state. No-op for a
+    /// group with no registered overlay (deleted group, or the window isn't
+    /// open). Called from `StageDisplayContentView.programPane`'s existing
+    /// 0.5 Hz poll, the SAME cadence `paneHasContent` was already read at
+    /// for the D20 "NO SOURCE" watermark — a plain `CALayer` property
+    /// write, not a SwiftUI state mutation, so driving it from inside a
+    /// `TimelineView` tick doesn't trip SwiftUI's update-during-render
+    /// diagnostics (nothing `@Observable` is touched).
+    func updateProgramTally(groupID: UUID, label: String, hasContent: Bool) {
+        guard let overlay = programOverlays[groupID] else { return }
+        Self.applyProgramTally(overlay, label: label, hasContent: hasContent)
     }
 
     /// Test-only introspection (also handy for future debugging): the
@@ -367,8 +391,12 @@ final class StageDisplayController {
         CATransaction.setDisableActions(true)
         for pane in settings.programPanes where pane.enabled {
             guard let groupID = pane.programGroupID, let layer = programHostLayers[groupID] else { continue }
-            layer.frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+            let frame = StageDisplayGeometry.appKitFrame(for: pane.rect, in: container.bounds.size)
+            layer.frame = frame
             Self.reframeMirroredContent(host: layer)
+            if let overlay = programOverlays[groupID] {
+                Self.reframeProgramOverlay(overlay, frame: frame)
+            }
         }
         CATransaction.commit()
     }
@@ -425,6 +453,9 @@ final class StageDisplayController {
                 CATransaction.setDisableActions(true)
                 layer.frame = frame
                 Self.reframeMirroredContent(host: layer)
+                if let overlay = programOverlays[groupID] {
+                    Self.reframeProgramOverlay(overlay, frame: frame)
+                }
                 CATransaction.commit()
                 continue
             }
@@ -457,6 +488,11 @@ final class StageDisplayController {
             // zPosition when set, regardless of array index. Ordinary panes
             // (`content`) stay at the CALayer default, 0.
             layer.zPosition = Self.programLayerZPosition
+            // D23: tiny corner radius, matching every other multiview tile
+            // — clipped so live mirrored content doesn't square off past the
+            // rounded chrome painted around it (see `ProgramOverlay` below).
+            layer.cornerRadius = StageDisplayChrome.cornerRadius
+            layer.masksToBounds = true
             if let panicLayer {
                 containerLayer.insertSublayer(layer, below: panicLayer)
             } else {
@@ -464,6 +500,24 @@ final class StageDisplayController {
             }
             programHostLayers[groupID] = layer
             OutputWindowManager.shared.registerExternalHost(layer, for: Self.programTarget(for: groupID))
+
+            // D23: the paired above-mirror chrome — tally border + always-
+            // visible group-name label — a SIBLING of `layer`, never a
+            // child (see `programOverlays`' doc for why). `outputGroups` is
+            // already in hand here so the label starts correct immediately;
+            // `updateProgramTally` (driven by the SwiftUI placeholder's
+            // existing poll) keeps it live afterward, including group
+            // renames and the tally border's on-air/idle color.
+            let groupName = outputGroups.first(where: { $0.id == groupID })?.name ?? "(deleted)"
+            let overlay = Self.makeProgramOverlay(frame: frame)
+            overlay.root.zPosition = Self.programOverlayZPosition
+            if let panicLayer {
+                containerLayer.insertSublayer(overlay.root, below: panicLayer)
+            } else {
+                containerLayer.addSublayer(overlay.root)
+            }
+            Self.applyProgramTally(overlay, label: groupName, hasContent: false)
+            programOverlays[groupID] = overlay
         }
     }
 
@@ -472,6 +526,10 @@ final class StageDisplayController {
         OutputWindowManager.shared.unregisterExternalHost(for: Self.programTarget(for: groupID))
         layer.removeFromSuperlayer()
         programHostLayers[groupID] = nil
+        if let overlay = programOverlays[groupID] {
+            overlay.root.removeFromSuperlayer()
+            programOverlays[groupID] = nil
+        }
     }
 
     private func teardownAllProgramPanes() {
@@ -489,6 +547,86 @@ final class StageDisplayController {
     /// duplicated magic number.
     static let programLayerZPosition: CGFloat = 100
     static let panicLayerZPosition: CGFloat = 1000
+    /// D23: the above-mirror chrome (tally border + group-name label) sits
+    /// strictly between the mirrored content and PANIC — visible over live
+    /// video, but still covered the instant the operator panics.
+    static let programOverlayZPosition: CGFloat = 200
+
+    // MARK: - D23: program-pane chrome (tally border + always-visible label)
+
+    /// A program pane's above-mirror chrome — `root` is a SIBLING of that
+    /// group's `programHostLayers` entry (same frame, transparent fill,
+    /// `programOverlayZPosition`), never a child: `paneHasContent` reads
+    /// the host's `sublayers` directly to mean "is a player actually
+    /// mirroring here", and `MirrorIntegrationTests` pins the host's
+    /// `sublayers` to hold ONLY the mirrored player content (nothing else)
+    /// both while attached and after a stop — a label/border living inside
+    /// the host would corrupt both. `labelBackground`/`labelText` are kept
+    /// as separate layers (rather than baked into one) so `reframeProgramOverlay`
+    /// can resize the label strip without touching the border-carrying `root`.
+    struct ProgramOverlay {
+        let root: CALayer
+        let labelBackground: CALayer
+        let labelText: CATextLayer
+    }
+
+    private static func makeProgramOverlay(frame: CGRect) -> ProgramOverlay {
+        let root = CALayer()
+        root.backgroundColor = nil   // transparent — only the border ring + label strip paint.
+        root.cornerRadius = StageDisplayChrome.cornerRadius
+        root.masksToBounds = true    // keeps the label strip's corners clipped to match the tile.
+
+        let labelBackground = CALayer()
+        labelBackground.backgroundColor = StageDisplayChrome.labelBackgroundCG
+        root.addSublayer(labelBackground)
+
+        let labelText = CATextLayer()
+        labelText.alignmentMode = .center
+        labelText.truncationMode = .end
+        labelText.foregroundColor = StageDisplayChrome.labelTextCG
+        labelText.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        labelText.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        labelBackground.addSublayer(labelText)
+
+        let overlay = ProgramOverlay(root: root, labelBackground: labelBackground, labelText: labelText)
+        Self.reframeProgramOverlay(overlay, frame: frame)
+        return overlay
+    }
+
+    /// Re-lay the overlay's own frame AND its label strip's size (which
+    /// scales with the tile, like every other pane's label bar) — called
+    /// alongside `reframeMirroredContent` everywhere the host's frame
+    /// changes: initial creation, a live pane-rect edit, and floating-window
+    /// resize.
+    private static func reframeProgramOverlay(_ overlay: ProgramOverlay, frame: CGRect) {
+        // Unlike `reframeMirroredContent` (which must avoid `.frame` because
+        // a MIRRORED player's layer can carry a non-identity transform),
+        // this overlay is entirely ours and never transformed — plain
+        // `.frame` is correct and simplest.
+        overlay.root.frame = frame
+        let barHeight = max(14, frame.height * 0.09)
+        overlay.labelBackground.frame = CGRect(x: 0, y: 0, width: frame.width, height: barHeight)
+        overlay.labelText.frame = overlay.labelBackground.bounds
+        overlay.labelText.fontSize = max(9, min(13, barHeight * 0.5))
+    }
+
+    /// Push the current tally + group name onto one program pane's overlay.
+    /// A plain `CALayer`/`CATextLayer` property write — cheap and safe to
+    /// call every poll tick even when nothing actually changed.
+    private static func applyProgramTally(_ overlay: ProgramOverlay, label: String, hasContent: Bool) {
+        let tally = StageDisplayTally.program(hasContent: hasContent)
+        overlay.root.borderWidth = tally.borderWidth
+        overlay.root.borderColor = tally.borderColorCG
+        // A crude but dependency-free approximation of SwiftUI's `.tracking`
+        // letter-spacing — `CATextLayer` has no kerning property for a plain
+        // `String`, and reaching for an `NSAttributedString` here would mean
+        // re-deriving the font/size/color on every reframe instead of the
+        // plain `.fontSize` property `reframeProgramOverlay` already updates.
+        let spaced = label.uppercased().map(String.init).joined(separator: "\u{2009}")
+        if overlay.labelText.string as? String != spaced {
+            overlay.labelText.string = spaced
+        }
+    }
 
     /// D20: re-frame every DIRECT sublayer of a program host layer to match
     /// the host's own CURRENT bounds — called right after the host itself is
@@ -739,82 +877,90 @@ struct StageDisplayContentView: View {
         }
     }
 
+    // D23: every non-program pane wears the same "ATEM-style multiview"
+    // tile chrome (`MultiviewTile`, see `StageDisplayChrome.swift`) — a
+    // near-black background, thin border (tally-colored where the pane
+    // calls for one), tiny corner radius, and a bottom-center label bar.
+    // A program pane's own tally border + label live in a raw CALayer
+    // ABOVE its mirrored content instead (`programPane` below,
+    // `StageDisplayController.ProgramOverlay`) since SwiftUI content here
+    // paints strictly BELOW that mirror layer — see this file's z-order
+    // notes on `StageDisplayController.syncProgramPanes`.
+
     // MARK: Clock
 
     private func clockPane(size: CGSize) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(StageDisplayFormat.wallClock(context.date))
-                .font(.system(size: size.height * 0.7, weight: .semibold, design: .monospaced))
-                .minimumScaleFactor(0.3)
-                .lineLimit(1)
-                .foregroundStyle(.white)
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
+        MultiviewTile(label: "CLOCK", size: size) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(StageDisplayFormat.wallClock(context.date))
+                    .font(.system(size: size.height * 0.6, weight: .heavy, design: .monospaced))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.3)
+                    .lineLimit(1)
+                    .foregroundStyle(.white)
+            }
         }
     }
 
     // MARK: Show timer
 
-    @ViewBuilder
     private func showTimerPane(size: CGSize) -> some View {
-        if let startedAt = app.showModeEnteredAt {
-            TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                VStack(alignment: .trailing, spacing: size.height * 0.06) {
-                    Text("SHOW")
-                        .font(.system(size: size.height * 0.22, weight: .semibold))
-                        .foregroundStyle(.gray)
+        MultiviewTile(label: "SHOW TIMER", size: size) {
+            if let startedAt = app.showModeEnteredAt {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
                     Text(StageDisplayFormat.elapsed(from: startedAt, to: context.date))
-                        .font(.system(size: size.height * 0.6, weight: .semibold, design: .monospaced))
+                        .font(.system(size: size.height * 0.55, weight: .heavy, design: .monospaced))
+                        .monospacedDigit()
                         .minimumScaleFactor(0.3)
                         .lineLimit(1)
                         .foregroundStyle(.white)
                 }
-                .frame(width: size.width, height: size.height, alignment: .topTrailing)
             }
         }
     }
 
     // MARK: Standing by — the hero pane
 
-    @ViewBuilder
     private func standingByPane(size: CGSize) -> some View {
-        VStack(spacing: size.height * 0.04) {
-            if let cue = app.transport.standingByCue {
-                // D20: the cue number moves LEFT of the name on the same
-                // baseline row, and grows to roughly half the name's size
-                // (was a small caption-sized line above it) — everything
-                // about how the NAME itself is sized (`minimumScaleFactor`,
-                // `lineLimit`, alignment) is unchanged.
-                HStack(alignment: .firstTextBaseline, spacing: size.width * 0.03) {
-                    Text(cue.number)
-                        .font(.system(size: size.height * 0.25, weight: .semibold, design: .monospaced))
+        let tally = StageDisplayTally.standingBy(hasStandingByCue: app.transport.standingByCue != nil)
+        return MultiviewTile(label: "STANDING BY", tally: tally, size: size) {
+            VStack(spacing: size.height * 0.04) {
+                if let cue = app.transport.standingByCue {
+                    // D20: the cue number moves LEFT of the name on the same
+                    // baseline row, and grows to roughly half the name's size
+                    // (was a small caption-sized line above it) — everything
+                    // about how the NAME itself is sized (`minimumScaleFactor`,
+                    // `lineLimit`, alignment) is unchanged.
+                    HStack(alignment: .firstTextBaseline, spacing: size.width * 0.03) {
+                        Text(cue.number)
+                            .font(.system(size: size.height * 0.25, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.gray)
+                            .lineLimit(1)
+                        Text(cue.displayName)
+                            .font(.system(size: size.height * 0.5, weight: .bold))
+                            .minimumScaleFactor(0.15)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white)
+                    }
+                } else if app.transport.isPlayheadPastEnd {
+                    Text("END OF SHOW")
+                        .font(.system(size: size.height * 0.22, weight: .bold))
                         .foregroundStyle(.gray)
-                        .lineLimit(1)
-                    Text(cue.displayName)
-                        .font(.system(size: size.height * 0.5, weight: .bold))
-                        .minimumScaleFactor(0.15)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white)
+                } else {
+                    Text("—")
+                        .font(.system(size: size.height * 0.3, weight: .bold))
+                        .foregroundStyle(.gray)
                 }
-            } else if app.transport.isPlayheadPastEnd {
-                Text("END OF SHOW")
-                    .font(.system(size: size.height * 0.22, weight: .bold))
-                    .foregroundStyle(.gray)
-            } else {
-                Text("—")
-                    .font(.system(size: size.height * 0.3, weight: .bold))
-                    .foregroundStyle(.gray)
             }
         }
-        .frame(width: size.width, height: size.height)
     }
 
     // MARK: Notes — the standing-by cue's notes, its own pane
 
-    @ViewBuilder
     private func notesPane(size: CGSize) -> some View {
-        if let cue = app.transport.standingByCue {
-            let notes = document.cue(withID: cue.id)?.notes ?? ""
+        let notes = app.transport.standingByCue.flatMap { document.cue(withID: $0.id)?.notes } ?? ""
+        return MultiviewTile(label: "NOTES", size: size) {
             if !notes.isEmpty {
                 Text(notes)
                     .font(.system(size: size.height * 0.3))
@@ -822,69 +968,79 @@ struct StageDisplayContentView: View {
                     .lineLimit(4)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.gray)
-                    .frame(width: size.width, height: size.height)
+                    .padding(.horizontal, size.width * 0.05)
             }
         }
     }
 
     // MARK: Running cues
 
-    @ViewBuilder
     private func runningPane(size: CGSize) -> some View {
-        if !app.transport.registry.isEmpty {
-            TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                VStack(alignment: .leading, spacing: size.height * 0.04) {
-                    ForEach(app.transport.registry.instances) { instance in
-                        StageDisplayRunningRow(
-                            instance: instance,
-                            rowFontSize: size.height * 0.14,
-                            now: context.date
-                        )
+        MultiviewTile(label: "RUNNING", size: size) {
+            if !app.transport.registry.isEmpty {
+                TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                    VStack(alignment: .leading, spacing: size.height * 0.04) {
+                        ForEach(app.transport.registry.instances) { instance in
+                            StageDisplayRunningRow(
+                                instance: instance,
+                                rowFontSize: size.height * 0.14,
+                                now: context.date
+                            )
+                        }
                     }
+                    .padding(size.width * 0.04)
+                    .frame(width: size.width, height: size.height, alignment: .topLeading)
                 }
-                .frame(width: size.width, height: size.height, alignment: .topLeading)
             }
         }
     }
 
-    // MARK: Program — placeholder; the LIVE layer is hosted outside SwiftUI
+    // MARK: Program — placeholder; the LIVE layer (and its tally border +
+    // label) are hosted outside SwiftUI entirely.
 
-    /// Always-black with a dim "PROGRAM · <group name>" watermark — D16: the
-    /// group name distinguishes multiple simultaneous program panes at a
-    /// glance while idle. A group that's been deleted since this pane was
-    /// added reads "PROGRAM · (deleted)"; `StageDisplayController` also
-    /// registers no live layer for it (see `syncProgramPanes`), so it can
-    /// never show anything but this placeholder. The actual mirrored cue
-    /// content, when the group is live, is a raw CALayer
-    /// `StageDisplayController` positions directly over this same screen
-    /// rect — transparent until a player attaches, so this watermark shows
-    /// through whenever nothing is currently routed here.
+    /// Multiview tile background + a very dim centered "NO SOURCE"
+    /// watermark, shown only while idle. D23: the tile's tally border (red
+    /// while on air) and its bottom-center GROUP-NAME label — the two
+    /// things that must stay visible even when a live video mirror is
+    /// filling this exact rect — are NOT drawn here. They're painted by
+    /// `StageDisplayController.ProgramOverlay`, a raw CALayer sibling of
+    /// the mirror layer sitting strictly ABOVE it (`programOverlayZPosition`
+    /// between `programLayerZPosition` and `panicLayerZPosition`); anything
+    /// drawn in THIS SwiftUI view paints at the ordinary-content zPosition
+    /// (0), strictly BELOW the mirror (100), so it would be invisible the
+    /// instant the group goes live. `updateProgramTally` below pushes this
+    /// same `hasContent` read (and the live group name) onto that overlay
+    /// every tick, so both halves of the chrome stay in lockstep despite
+    /// living in two different rendering systems.
     private func programPane(_ pane: StageDisplayPane, size: CGSize) -> some View {
         let groupName = pane.programGroupID.flatMap { document.show.settings.group(withID: $0)?.name } ?? "(deleted)"
         let groupID = pane.programGroupID
-        // D20: the placeholder is a WATERMARK for "nothing routed here yet" —
-        // it must stop painting the instant real content is mirrored, or it
-        // shows through any gap letterboxing/mis-fit leaves (the reported
-        // "stray labels from video sources" bug). `paneHasContent` reads the
-        // live layer tree directly (no new plumbing); polled at ~2 Hz like
-        // the other periodically-updating panes (`clockPane`/`runningPane`)
-        // rather than driving new state on every layer-tree change.
+        // D20: the watermark must stop painting the instant real content is
+        // mirrored, or it shows through any gap letterboxing/mis-fit leaves
+        // (the reported "stray labels from video sources" bug). Polled at
+        // ~2 Hz like the other periodically-updating panes rather than
+        // driving new state on every layer-tree change.
         return TimelineView(.periodic(from: .now, by: 0.5)) { _ in
             let hasContent = groupID.map { app.stageDisplayController.paneHasContent(groupID: $0) } ?? false
+            // A plain `let` declaration (not an `if` statement) so this
+            // side-effecting CALayer push never has to type-check as View
+            // content under `@ViewBuilder` — matches the well-known
+            // `let _ = …` idiom for running non-View code inside a
+            // ViewBuilder closure.
+            let _ = groupID.map { app.stageDisplayController.updateProgramTally(groupID: $0, label: groupName, hasContent: hasContent) }
             ZStack {
-                Color.black
+                StageDisplayChrome.tileBackground
                 if !hasContent {
-                    Text("PROGRAM · \(groupName)")
-                        .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
+                    Text("NO SOURCE")
+                        .font(.system(size: size.height * 0.14, weight: .semibold, design: .monospaced))
                         .tracking(2)
                         .lineLimit(1)
                         .minimumScaleFactor(0.4)
-                        .foregroundStyle(.white.opacity(0.15))
-                        .padding(.horizontal, size.width * 0.05)
+                        .foregroundStyle(.white.opacity(0.12))
                 }
             }
             .frame(width: size.width, height: size.height)
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: StageDisplayChrome.cornerRadius, style: .continuous))
         }
     }
 
@@ -894,54 +1050,47 @@ struct StageDisplayContentView: View {
     /// capture pipeline (see `CameraFrameProcessor.deliverReadoutIfDue`), so
     /// this pane reads it directly (like `standingByPane`/`notesPane`)
     /// rather than driving its own `TimelineView` tick.
-    @ViewBuilder
     private func gesturePane(size: CGSize) -> some View {
-        if let readout = app.gestureReadout {
-            VStack(alignment: .leading, spacing: size.height * 0.06) {
-                HStack(spacing: size.width * 0.05) {
-                    Image(systemName: readout.goGesture.symbolName)
-                        .font(.system(size: size.height * 0.30, weight: .semibold))
-                    Text(readout.goGesture.label.uppercased())
-                        .font(.system(size: size.height * 0.13, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                    Spacer(minLength: 0)
-                }
-                GeometryReader { barGeo in
-                    ZStack(alignment: .leading) {
-                        Rectangle().fill(Color.white.opacity(0.15))
-                        Rectangle()
-                            .fill(Theme.accent)
-                            .frame(width: barGeo.size.width * readout.holdProgress)
+        MultiviewTile(label: "GESTURE", size: size) {
+            if let readout = app.gestureReadout {
+                VStack(alignment: .leading, spacing: size.height * 0.06) {
+                    HStack(spacing: size.width * 0.05) {
+                        Image(systemName: readout.goGesture.symbolName)
+                            .font(.system(size: size.height * 0.30, weight: .semibold))
+                        Text(readout.goGesture.label.uppercased())
+                            .font(.system(size: size.height * 0.13, weight: .semibold, design: .monospaced))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                        Spacer(minLength: 0)
+                    }
+                    GeometryReader { barGeo in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(Color.white.opacity(0.15))
+                            Rectangle()
+                                .fill(Theme.accent)
+                                .frame(width: barGeo.size.width * readout.holdProgress)
+                        }
+                    }
+                    .frame(height: max(3, size.height * 0.09))
+                    .clipShape(Capsule())
+                    HStack(spacing: size.width * 0.05) {
+                        if readout.cooldownRemaining > 0 {
+                            Text(String(format: "COOLDOWN %.1f s", readout.cooldownRemaining))
+                                .font(.system(size: size.height * 0.11, design: .monospaced))
+                                .foregroundStyle(.gray)
+                        }
+                        let others = readout.detected.filter { $0 != readout.goGesture }
+                        ForEach(others, id: \.self) { gesture in
+                            Image(systemName: gesture.symbolName)
+                                .font(.system(size: size.height * 0.13))
+                                .foregroundStyle(.gray)
+                        }
                     }
                 }
-                .frame(height: max(3, size.height * 0.09))
-                .clipShape(Capsule())
-                HStack(spacing: size.width * 0.05) {
-                    if readout.cooldownRemaining > 0 {
-                        Text(String(format: "COOLDOWN %.1f s", readout.cooldownRemaining))
-                            .font(.system(size: size.height * 0.11, design: .monospaced))
-                            .foregroundStyle(.gray)
-                    }
-                    let others = readout.detected.filter { $0 != readout.goGesture }
-                    ForEach(others, id: \.self) { gesture in
-                        Image(systemName: gesture.symbolName)
-                            .font(.system(size: size.height * 0.13))
-                            .foregroundStyle(.gray)
-                    }
-                }
+                .foregroundStyle(.white)
+                .padding(size.width * 0.05)
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
             }
-            .foregroundStyle(.white)
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
-        } else {
-            ZStack {
-                Text("GESTURE")
-                    .font(.system(size: size.height * 0.16, weight: .bold, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(.white.opacity(0.15))
-            }
-            .frame(width: size.width, height: size.height)
-            .clipped()
         }
     }
 }
@@ -960,7 +1109,8 @@ struct StageDisplayPanicOverlay: View {
                 ZStack {
                     Theme.panic
                     Text("PANIC")
-                        .font(.system(size: geo.size.height * 0.12, weight: .black))
+                        .font(.system(size: geo.size.height * 0.12, weight: .black, design: .monospaced))
+                        .tracking(4)
                         .foregroundStyle(.white)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -975,6 +1125,11 @@ struct StageDisplayPanicOverlay: View {
 /// A dedicated `View` (not a helper function) so the stored `now` property
 /// forces SwiftUI to re-read `instance.duration`/`elapsed` every 10 Hz tick
 /// — mirrors ActiveCuesPanel's `ActiveCueRow`, same reasoning documented there.
+///
+/// D23: the bar is styled as a broadcast METER, not a pill — a thin
+/// rectangular bright-on-dark track (no capsule clip), turning red in the
+/// final stretch like a countdown running low, with a hairline rule
+/// separating each row from the next.
 private struct StageDisplayRunningRow: View {
     let instance: CueInstance
     let rowFontSize: CGFloat
@@ -985,6 +1140,9 @@ private struct StageDisplayRunningRow: View {
         let duration = instance.duration
         let elapsed = instance.elapsed
         let infinite = StageDisplayFormat.isInfiniteLoop(instance.cue)
+        let fraction: Double? = duration.flatMap { d in
+            (d > 0 && !infinite) ? min(max((elapsed ?? 0) / d, 0), 1) : nil
+        }
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 Text(instance.cue.number)
@@ -994,20 +1152,25 @@ private struct StageDisplayRunningRow: View {
                     .lineLimit(1)
                 Spacer()
                 Text(StageDisplayFormat.remaining(duration: duration, elapsed: elapsed, infiniteLoop: infinite))
-                    .font(.system(size: rowFontSize, design: .monospaced))
+                    .font(.system(size: rowFontSize, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
             }
             .foregroundStyle(.white)
             GeometryReader { barGeo in
                 ZStack(alignment: .leading) {
-                    Rectangle().fill(Color.white.opacity(0.15))
-                    if let duration, duration > 0, !infinite {
-                        let fraction = min(max((elapsed ?? 0) / duration, 0), 1)
-                        Rectangle().fill(Color.white).frame(width: barGeo.size.width * fraction)
+                    Rectangle().fill(Color.white.opacity(0.1))
+                    if let fraction {
+                        Rectangle()
+                            .fill(fraction > 0.85 ? Theme.panic : Color.white)
+                            .frame(width: barGeo.size.width * fraction)
                     }
                 }
             }
-            .frame(height: max(2, rowFontSize * 0.2))
-            .clipShape(Capsule())
+            .frame(height: max(3, rowFontSize * 0.22))
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 1)
+                .padding(.top, 2)
         }
     }
 }
