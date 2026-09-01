@@ -96,17 +96,24 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   double-tap STOP ALL, standing-by cue + notes) at a QR code you scan
   from the settings panel. All zero-config,
   zero-dependency, off by default, LAN-only.
-- **Stage display** — a performer-facing confidence monitor: fullscreen on
-  any spare display in Show mode (never over the operator's own screen —
-  it floats there instead, and ⌘⎋ always exits Show mode), a floating
-  resizable window in Rehearsal. Fully editable pane layout (drag, resize,
-  snap on a 16:9 canvas): clock, show timer, the standing-by cue huge, its
-  notes, running cues with time remaining, the gesture hold-progress bar —
-  and **live program panes** that mirror any number of video outputs
-  (16:9-locked, one decode, an extra layer, attach and detach mid-playback
-  like a video patchbay). Never a cue target. Any output group can also
-  become its own **floating resizable window** in every mode — a prompter
-  feed on the operator screen during a real show.
+
+  <p align="center"><img src="Support/WebRemote_screenshot.png" width="300" alt="The web remote phone page: standing-by cue, giant GO, prev/next, STOP ALL"></p>
+- **Stage display** — a performer-facing confidence monitor styled like a
+  broadcast **multiview**: labeled tiles, tally borders (red = a mirror is
+  live, green = standing by), ON-AIR-style clock and show-timer tiles.
+  Fullscreen on any spare display in Show mode (never over the operator's
+  own screen — it floats there instead, and ⌘⎋ always exits Show mode), a
+  floating resizable window in Rehearsal. Fully editable pane layout
+  (drag, resize, snap on a 16:9 canvas, one-press multiview grid reset):
+  clock, show timer, the standing-by cue huge, its notes, running cues
+  with meters, the gesture hold-progress bar — and **live program panes**
+  that mirror any number of video outputs (16:9-locked, one decode, an
+  extra layer, attach and detach mid-playback like a video patchbay).
+  Never a cue target. Any output group can also become its own **floating
+  resizable window** in every mode — a prompter feed on the operator
+  screen during a real show.
+
+  <p align="center"><img src="Support/StageDisplay_screenshot.png" width="760" alt="Stage display multiview: clock, standing-by, live program mirror with tally, notes, running cues"></p>
 - **Preflight** — one click (and automatically on entering Show mode) checks
   the whole cue list against the rig: missing media, unassigned or
   display-less output groups, missing camera permission, disconnected audio
