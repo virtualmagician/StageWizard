@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import StageWizard
 
@@ -95,6 +96,37 @@ final class OSCSendTests: XCTestCase {
     func testEmptyArgumentListRoundTrips() {
         let data = OSCServer.encode(address: "/stagewand/blackout", arguments: [])
         XCTAssertEqual(OSCServer.parse(data), [OSCMessage(address: "/stagewand/blackout", arguments: [])])
+    }
+
+    // MARK: - D28-fix5: OSCSender.outcome(for:) — pure state-transition decision
+
+    /// The core of the fix: `.waiting` (unreachable host, DNS failure, no
+    /// route) must be treated as a FAILURE — warn and clean up — not left
+    /// alone to retry indefinitely (which would both leak the connection
+    /// entry and risk delivering a stale datagram late if the network
+    /// recovers mid-show).
+    @MainActor
+    func testWaitingStateIsClassifiedAsWarnAndCleanUp() {
+        let outcome = OSCSender.outcome(for: .waiting(.posix(.EHOSTUNREACH)), host: "lighting-desk.local", port: 9000)
+        XCTAssertEqual(outcome, .warnAndCleanUp(message: "OSC send to lighting-desk.local:9000 unreachable"))
+    }
+
+    @MainActor
+    func testFailedStateIsClassifiedAsWarnAndCleanUpWithTheUnderlyingError() {
+        let error = NWError.posix(.ECONNREFUSED)
+        let outcome = OSCSender.outcome(for: .failed(error), host: "127.0.0.1", port: 9000)
+        XCTAssertEqual(outcome, .warnAndCleanUp(message: "OSC send to 127.0.0.1:9000 failed: \(error.localizedDescription)"))
+    }
+
+    @MainActor
+    func testCancelledStateIsClassifiedAsCleanUpSilently() {
+        XCTAssertEqual(OSCSender.outcome(for: .cancelled, host: "127.0.0.1", port: 9000), .cleanUpSilently)
+    }
+
+    @MainActor
+    func testSetupAndPreparingStatesAreIgnored() {
+        XCTAssertEqual(OSCSender.outcome(for: .setup, host: "127.0.0.1", port: 9000), .ignore)
+        XCTAssertEqual(OSCSender.outcome(for: .preparing, host: "127.0.0.1", port: 9000), .ignore)
     }
 
     // MARK: - Runtime harness (mirrors RuntimeTests' MockProvider pattern)

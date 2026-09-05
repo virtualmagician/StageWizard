@@ -148,6 +148,69 @@ final class HTTPRequestTests: XCTestCase {
         XCTAssertNil(HTTPRequestSender.request(for: HTTPRequestBody(urlString: "")))
     }
 
+    // MARK: - D31-fix7: scheme-less URLs — fire time normalizes like the UI does
+
+    /// A hand-edited show file (or a value committed via tab-out/click-away,
+    /// which skips the inspector's `.onSubmit`-only "http://" prepend) can
+    /// carry a scheme-less string. `URL(string:)` happily parses it as a
+    /// path-only URL — exactly what let it slip past Preflight's
+    /// `URL(string:) == nil` check — so fire time must independently
+    /// normalize it the same way, rather than building a doomed request.
+    func testRequestForSchemeLessURLPrependsHTTP() {
+        guard let request = HTTPRequestSender.request(for: HTTPRequestBody(urlString: "192.168.1.50/relay1")) else {
+            return XCTFail("expected a valid request once http:// is prepended")
+        }
+        XCTAssertEqual(request.url?.scheme, "http")
+        XCTAssertEqual(request.url?.host, "192.168.1.50")
+        XCTAssertEqual(request.url?.path, "/relay1")
+    }
+
+    func testRequestForAlreadySchemedURLIsUntouched() {
+        guard let request = HTTPRequestSender.request(for: HTTPRequestBody(urlString: "https://example.com/go")) else {
+            return XCTFail("expected a valid request")
+        }
+        XCTAssertEqual(request.url?.scheme, "https", "an existing scheme must never be overridden")
+    }
+
+    /// The load-bearing pin: preflight and `request(for:)` must agree BY
+    /// CONSTRUCTION for a scheme-less string — preflight already treats it
+    /// as parseable (no change needed there), and fire time must now succeed
+    /// too, producing a valid http:// request rather than silently failing
+    /// with NSURLErrorUnsupportedURL down in URLSession.
+    @MainActor
+    func testSchemeLessURLRoundTripsThroughBothPreflightAndFireTime() {
+        let urlString = "192.168.1.50/relay1"
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .httpRequest(HTTPRequestBody(urlString: urlString)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "preflight already treats a scheme-less string as parseable: \(issues)")
+
+        guard let request = HTTPRequestSender.request(for: HTTPRequestBody(urlString: urlString)) else {
+            return XCTFail("fire time must build a valid request for the exact same string preflight accepted")
+        }
+        XCTAssertEqual(request.url?.scheme, "http", "the two layers must agree by construction")
+        XCTAssertEqual(request.url?.host, "192.168.1.50")
+    }
+
+    // MARK: - D31-fix6: session configuration — pure construction
+
+    func testConfigurationSetsBothRequestAndResourceTimeoutToBodyTimeout() {
+        let configuration = HTTPRequestSender.configuration(for: HTTPRequestBody(timeout: 12))
+        XCTAssertEqual(configuration.timeoutIntervalForRequest, 12)
+        XCTAssertEqual(
+            configuration.timeoutIntervalForResource, 12,
+            "the WHOLE transfer must be capped — timeoutIntervalForRequest alone is an idle/inter-byte timeout " +
+            "that never trips while a streaming response keeps trickling bytes in"
+        )
+    }
+
+    func testConfigurationVariesTimeoutPerCue() {
+        XCTAssertEqual(HTTPRequestSender.configuration(for: HTTPRequestBody(timeout: 1)).timeoutIntervalForResource, 1)
+        XCTAssertEqual(HTTPRequestSender.configuration(for: HTTPRequestBody(timeout: 30)).timeoutIntervalForResource, 30)
+    }
+
     // MARK: - HTTPRequestSender.send: its own malformed-URL warning (never the empty-URL case)
 
     @MainActor

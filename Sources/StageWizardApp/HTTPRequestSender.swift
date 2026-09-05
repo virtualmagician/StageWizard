@@ -23,6 +23,22 @@ import Foundation
 /// the life of the request regardless of ARC self-retention nuances around
 /// bare local `URLSession` instances.
 ///
+/// D31-fix6: `handleCompletion` calls `finishTasksAndInvalidate()` on the
+/// session it removes from `pendingSessions` — an un-invalidated
+/// `URLSession` leaks its delegate machinery/queue/connection cache until
+/// the app exits (Apple's documented contract), so dropping the last
+/// dictionary reference alone was not enough; a show that fires
+/// `.httpRequest` cues repeatedly (a status ping every scene, say) would
+/// otherwise leak one session per fire for its whole runtime. The
+/// configuration also sets `timeoutIntervalForResource` (not just
+/// `timeoutIntervalForRequest`, which is an IDLE/inter-byte timeout that
+/// never trips while a response keeps trickling in) to `body.timeout`, so a
+/// streaming/never-ending response (an MJPEG or text/event-stream endpoint —
+/// plausible on the LAN AV/lighting gear this feature targets) is bounded in
+/// BOTH time and the memory `URLSession.dataTask` buffers the response into.
+/// The response body itself is always discarded either way — only the
+/// completion/status is ever used.
+///
 /// ATS: plain `http://` endpoints are the norm for show-control gear on a
 /// closed LAN (lighting consoles, relay boxes, video switchers) — see
 /// project.yml's `NSAppTransportSecurity` exemption. This class never
@@ -51,10 +67,7 @@ final class HTTPRequestSender {
             return
         }
         let host = request.url?.host ?? body.urlString
-        // Ephemeral: no caching, no cookie jar — showtime purity, and every
-        // fire is independent of any previous one.
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = body.timeout
+        let configuration = Self.configuration(for: body)
         let session = URLSession(configuration: configuration)
         let key = UUID()
         pendingSessions[key] = session
@@ -67,7 +80,10 @@ final class HTTPRequestSender {
     }
 
     private func handleCompletion(key: UUID, host: String, response: URLResponse?, error: Error?) {
-        pendingSessions.removeValue(forKey: key)
+        // D31-fix6: without this, an un-invalidated URLSession leaks its
+        // delegate machinery/queue/connection cache until the app exits —
+        // dropping the dictionary reference alone was never enough.
+        pendingSessions.removeValue(forKey: key)?.finishTasksAndInvalidate()
         if let error {
             onWarning?("HTTP \(host) failed: \(error.localizedDescription)")
             return
@@ -77,12 +93,48 @@ final class HTTPRequestSender {
         }
     }
 
+    /// Pure session-configuration construction — `nonisolated` and
+    /// `internal` (not `private`) so tests can pin the resource-timeout bound
+    /// without opening a real connection (mirrors `request(for:)` below).
+    /// Ephemeral: no caching, no cookie jar — showtime purity, and every fire
+    /// is independent of any previous one. D31-fix6: sets BOTH
+    /// `timeoutIntervalForRequest` (idle/inter-byte — resets every time a
+    /// byte arrives, so it never trips for a trickling response) AND
+    /// `timeoutIntervalForResource` (the WHOLE transfer, start to finish) to
+    /// `body.timeout` — a streaming/never-ending response is now bounded in
+    /// time, which bounds the memory `dataTask` buffers it into as well.
+    nonisolated static func configuration(for body: HTTPRequestBody) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = body.timeout
+        configuration.timeoutIntervalForResource = body.timeout
+        return configuration
+    }
+
     /// Pure request construction — `nonisolated` and `internal` (not
     /// `private`) so tests can pin method/headers/timeout/body bytes
     /// without opening a real connection (mirrors `OSCSender.convert`).
     /// nil for a URL string that doesn't parse at all.
+    ///
+    /// D31-fix7: a non-empty, otherwise-parseable string with no scheme
+    /// (e.g. a hand-edited show file's "192.168.1.50/relay1", or a value
+    /// committed via tab-out/click-away — the inspector's own "http://"
+    /// prepend runs only on `.onSubmit`/Return) parses FINE as a path-only
+    /// URL — which is exactly what lets it slip past Preflight's
+    /// `URL(string:) == nil` check, only to fail here at fire time with
+    /// `NSURLErrorUnsupportedURL`. Prepend "http://" the same way the
+    /// inspector's own on-commit normalization would, so fire time and
+    /// preflight agree on every string preflight already treats as parseable
+    /// (see `HTTPRequestTests`'s round-trip pin) — defense in depth; this
+    /// doesn't require any change to Preflight itself.
     nonisolated static func request(for body: HTTPRequestBody) -> URLRequest? {
-        guard let url = URL(string: body.urlString) else { return nil }
+        guard let parsedURL = URL(string: body.urlString) else { return nil }
+        let url: URL
+        if parsedURL.scheme == nil {
+            guard let schemed = URL(string: "http://" + body.urlString) else { return nil }
+            url = schemed
+        } else {
+            url = parsedURL
+        }
         var request = URLRequest(url: url)
         request.timeoutInterval = body.timeout
         switch body.method {

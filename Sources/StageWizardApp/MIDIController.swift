@@ -59,17 +59,22 @@ final class MIDIController {
     /// like `sources`, regardless of whether the input listener is running.
     private(set) var destinations: [String] = []
 
-    @ObservationIgnored private var client = MIDIClientRef()
+    @ObservationIgnored private(set) var client = MIDIClientRef()
     @ObservationIgnored private var inputPort = MIDIPortRef()
     @ObservationIgnored private var connectedSources: Set<MIDIEndpointRef> = []
     @ObservationIgnored private var running = false
     @ObservationIgnored private var ccTracker = CCTransitionTracker()
-    /// D30: output half — created lazily on first `send(_:)` call, entirely
-    /// independent of `client`/`inputPort`/`running` above (which are the
-    /// LISTENER's, gated by `midiEnabled`). Sending must work even when the
-    /// listener is disabled, so this never touches `running`.
-    @ObservationIgnored private var outputClient = MIDIClientRef()
-    @ObservationIgnored private var outputPort = MIDIPortRef()
+    /// D30 (fixed): output half — created lazily on first `send(_:)` call,
+    /// entirely independent of `client`/`inputPort`/`running` above (which
+    /// are the LISTENER's, gated by `midiEnabled`). Sending must work even
+    /// when the listener is disabled, so this never touches `running` — and,
+    /// after the lifecycle fix below, `ensureOutputPort()` never touches
+    /// `client` either: the output half owns ITS OWN client, so `stop()`
+    /// disposing the listener's client can never silently invalidate this
+    /// one. `private(set)` (not `private`) on both so MIDIControllerTests can
+    /// pin that independence without needing a real connected destination.
+    @ObservationIgnored private(set) var outputClient = MIDIClientRef()
+    @ObservationIgnored private(set) var outputPort = MIDIPortRef()
 
     init() {
         // D30: destinations are a plain global CoreMIDI query — no client or
@@ -129,6 +134,15 @@ final class MIDIController {
         connectedSources.removeAll()
         sources = []
         ccTracker = CCTransitionTracker()
+        // D30 lifecycle fix: `outputPort`/`outputClient` are deliberately NOT
+        // touched here. They belong to the OUTPUT half (see `ensureOutputPort`),
+        // which — after the fix — never creates its port on `client` above, so
+        // disposing `client` can never leave `outputPort` dangling. (The
+        // original bug: `ensureOutputPort` reused this LISTENER's `client`
+        // when running, so this exact `MIDIClientDispose(client)` silently
+        // disposed `outputPort` too, without resetting it — every later
+        // `.midiSend` cue, and any pending delayed noteOff, then went into a
+        // dead port with no warning. See MIDIControllerTests.)
     }
 
     func cancelLearning() {
@@ -181,10 +195,11 @@ final class MIDIController {
     }
 
     /// Shared MIDI setup-change (hot-plug) handler for BOTH the listener's
-    /// client (`start()`) and the output-only client `ensureOutputPort` may
-    /// lazily create — at most one of the two ever exists at a time (see
-    /// `ensureOutputPort`), but either one's notification refreshes both
-    /// lists; `refreshSources()` is a no-op while the listener isn't running.
+    /// client (`start()`) and the independent output client `ensureOutputPort`
+    /// may lazily create — the two clients are entirely separate and may both
+    /// exist at once (see `ensureOutputPort`), but either one's notification
+    /// refreshes both lists; `refreshSources()` is a no-op while the listener
+    /// isn't running.
     private func handleMIDISetupChanged() {
         refreshSources()
         refreshDestinations()
@@ -194,19 +209,24 @@ final class MIDIController {
 
     /// Lazily create the output port `send(_:)` uses. Sending must work even
     /// when the LISTENER (`midiEnabled`) is off, so this is entirely
-    /// decoupled from `running`/`client`/`inputPort`: it reuses the
-    /// listener's client if one is already running (one client, two ports —
-    /// input and output), or creates a small output-only client on first
-    /// send otherwise. Returns nil only if CoreMIDI itself refuses.
+    /// decoupled from `running`/`client`/`inputPort`: it ALWAYS creates (or
+    /// reuses, on later calls) its own independent `outputClient` — it never
+    /// borrows the listener's `client`, even while the listener is running.
+    ///
+    /// This is deliberate and load-bearing, not just an optimization: an
+    /// earlier version reused the listener's client "when running" (one
+    /// client, two ports), which meant `stop()`'s `MIDIClientDispose(client)`
+    /// silently disposed this port too — every later `.midiSend`, and any
+    /// pending delayed noteOff, then went into a dead port with no warning
+    /// (`sendWord` ignored the OSStatus). Never reintroduce a `client`
+    /// parameter or read of `self.client` here; `MIDIControllerTests` pins
+    /// `outputClient != client` after a send while the listener is running.
+    ///
+    /// Returns nil only if CoreMIDI itself refuses to create the client/port.
     private func ensureOutputPort() -> MIDIPortRef? {
         if outputPort != MIDIPortRef() { return outputPort }
 
-        let clientToUse: MIDIClientRef
-        if client != MIDIClientRef() {
-            clientToUse = client
-        } else if outputClient != MIDIClientRef() {
-            clientToUse = outputClient
-        } else {
+        if outputClient == MIDIClientRef() {
             var newClient = MIDIClientRef()
             let status = MIDIClientCreateWithBlock("StageWizard Output" as CFString, &newClient) { @Sendable [weak self] _ in
                 Task { @MainActor in
@@ -215,11 +235,10 @@ final class MIDIController {
             }
             guard status == noErr else { return nil }
             outputClient = newClient
-            clientToUse = newClient
         }
 
         var newPort = MIDIPortRef()
-        guard MIDIOutputPortCreate(clientToUse, "StageWizard Output" as CFString, &newPort) == noErr else { return nil }
+        guard MIDIOutputPortCreate(outputClient, "StageWizard Output" as CFString, &newPort) == noErr else { return nil }
         outputPort = newPort
         return outputPort
     }
@@ -249,8 +268,16 @@ final class MIDIController {
         let destinationName = body.destinationName
         for (word, delay) in Self.plan(for: body) {
             if delay <= 0 {
+                // Throttled to at most ONE warning per plan entry — sending
+                // the same word to every "ALL destinations" target shouldn't
+                // spam one warning per destination if the port is dead.
+                var warnedThisSend = false
                 for destination in targets {
-                    Self.sendWord(word, port: port, destination: destination)
+                    let status = Self.sendWord(word, port: port, destination: destination)
+                    if status != noErr, !warnedThisSend {
+                        warnedThisSend = true
+                        onWarning?("MIDI: send failed (OSStatus \(status)) — message not delivered")
+                    }
                 }
             } else {
                 Task { @MainActor [weak self] in
@@ -259,8 +286,13 @@ final class MIDIController {
                     // Re-resolve by name at send time rather than reusing the
                     // captured `targets` — a device unplugged/replugged
                     // during the wait is handled the same way a live send is.
+                    var warnedThisSend = false
                     for destination in Self.matchingDestinations(named: destinationName) {
-                        Self.sendWord(word, port: port, destination: destination)
+                        let status = Self.sendWord(word, port: port, destination: destination)
+                        if status != noErr, !warnedThisSend {
+                            warnedThisSend = true
+                            self.onWarning?("MIDI: send failed (OSStatus \(status)) — message not delivered")
+                        }
                     }
                 }
             }
@@ -341,10 +373,11 @@ final class MIDIController {
     /// the MIDIEventList protocol — mirrors the receive side's
     /// `words(from:)` in reverse: `MIDIEventListInit`/`MIDIEventListAdd`
     /// build a one-packet, one-word list, and `MIDISendEventList` hands it
-    /// to CoreMIDI. Fire-and-forget: the OSStatus result is deliberately
-    /// ignored, matching `send`'s own "no destination validation here"
-    /// contract for a stale/bad destination.
-    private static func sendWord(_ word: UInt32, port: MIDIPortRef, destination: MIDIEndpointRef) {
+    /// to CoreMIDI. Returns the raw OSStatus (`noErr` on success) so callers
+    /// can surface a throttled operator warning on failure — e.g. a stale
+    /// port (see the D30 lifecycle fix in `ensureOutputPort`) or a
+    /// disconnected destination.
+    private static func sendWord(_ word: UInt32, port: MIDIPortRef, destination: MIDIEndpointRef) -> OSStatus {
         var eventList = MIDIEventList()
         var packet = MIDIEventListInit(&eventList, ._1_0)
         var words: [UInt32] = [word]
@@ -357,7 +390,7 @@ final class MIDIController {
             &words
         )
         _ = packet
-        _ = MIDISendEventList(port, destination, &eventList)
+        return MIDISendEventList(port, destination, &eventList)
     }
 
     // MARK: - Dispatch (MainActor)

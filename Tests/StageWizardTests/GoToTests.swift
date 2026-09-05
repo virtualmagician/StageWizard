@@ -223,6 +223,136 @@ final class GoToTests: XCTestCase {
         XCTAssertEqual(harness.transport.playheadID, child2.id)
     }
 
+    // MARK: - D31 fix: cycle/depth guard, nested-GoTo flag semantics, un-placeable targets
+
+    /// Mutual andFire GoTos (A → B → A → …) recurse synchronously with no
+    /// guard — this pins the fix: the SECOND time a GoTo cue's id reappears
+    /// in the active chain, `performGoTo` warns and stops instead of
+    /// overflowing the stack. Exactly one warning, and the playhead ends up
+    /// somewhere sane (never left standing on the looping pair).
+    @MainActor
+    func testMutualAndFireGoTosDoNotCrashAndStopAfterExactlyOneLoopWarning() async {
+        let harness = Harness()
+        var a = Cue(number: "1", body: .goTo(GoToBody(andFire: true)))
+        var b = Cue(number: "2", body: .goTo(GoToBody(andFire: true)))
+        a.body = .goTo(GoToBody(targetID: b.id, andFire: true))
+        b.body = .goTo(GoToBody(targetID: a.id, andFire: true))
+        harness.show.cues = [a, b]
+        harness.transport.go()
+        await harness.wait(0.05)
+        XCTAssertEqual(harness.warnings.count, 1, "exactly one loop warning: \(harness.warnings)")
+        XCTAssertTrue(harness.warnings.first?.contains("loop detected") ?? false)
+        XCTAssertEqual(harness.transport.playheadID, b.id, "the chain must stop and land somewhere sane, not crash or stick on the looping pair")
+        XCTAssertEqual(harness.transport.registry.instances.count, 0, "every GoTo instance in the aborted cascade must still terminate cleanly")
+    }
+
+    /// The header-self case from the audit: a GoTo that is the FIRST CHILD of
+    /// an enter-and-play-first group, targeting its own parent header.
+    /// `resolveGOTarget` resolves the header back to that same first child —
+    /// i.e. the GoTo cue itself — so the id-differs self-guard alone can't
+    /// catch it; only the chain guard does.
+    @MainActor
+    func testAndFireGoToTargetingItsOwnEnterGroupHeaderWarnsAndDoesNotCrash() async {
+        let harness = Harness()
+        let header = Cue(number: "1", body: .group(GroupBody(mode: .enterAndPlayFirst)))
+        var firstChild = { var c = audioCue("1.1"); c.parentID = header.id; return c }()
+        firstChild.body = .goTo(GoToBody(targetID: header.id, andFire: true))
+        let secondChild = { var c = audioCue("1.2"); c.parentID = header.id; return c }()
+        harness.show.cues = [header, firstChild, secondChild]
+        harness.transport.go()
+        await harness.wait(0.05)
+        XCTAssertEqual(harness.warnings.count, 1, "exactly one loop warning: \(harness.warnings)")
+        XCTAssertTrue(harness.warnings.first?.contains("loop detected") ?? false)
+        XCTAssertEqual(
+            harness.transport.playheadID, secondChild.id,
+            "GO must still advance past the (now inert) self-looping GoTo, into the far side of the group"
+        )
+        XCTAssertEqual(harness.transport.registry.instances.count, 0)
+    }
+
+    /// A legitimate, non-cyclic chain of THREE distinct andFire GoTos must
+    /// still work end-to-end — the loop/depth guard must never trip on
+    /// ordinary chained navigation, only on genuine re-entrancy.
+    @MainActor
+    func testLegitimateChainOfThreeDistinctGoTosStillWorksEndToEnd() async {
+        let harness = Harness()
+        let afterGoTo1 = audioCue("d1")
+        let afterGoTo2 = audioCue("d2")
+        let afterGoTo3 = audioCue("d3")
+        let target = audioCue("4")
+        let after = audioCue("5")
+        var goTo3 = Cue(number: "3", body: .goTo(GoToBody(andFire: true)))
+        goTo3.body = .goTo(GoToBody(targetID: target.id, andFire: true))
+        var goTo2 = Cue(number: "2", body: .goTo(GoToBody(andFire: true)))
+        goTo2.body = .goTo(GoToBody(targetID: goTo3.id, andFire: true))
+        var goTo1 = Cue(number: "1", body: .goTo(GoToBody(andFire: true)))
+        goTo1.body = .goTo(GoToBody(targetID: goTo2.id, andFire: true))
+        harness.show.cues = [goTo1, afterGoTo1, goTo2, afterGoTo2, goTo3, afterGoTo3, target, after]
+        harness.transport.go()
+        await harness.wait(0.05)
+        XCTAssertTrue(harness.warnings.isEmpty, "a legitimate non-cyclic chain must never warn: \(harness.warnings)")
+        XCTAssertNotNil(harness.provider.players[target.id], "the chain must actually fire the final target exactly once")
+        XCTAssertNil(harness.provider.players[afterGoTo1.id])
+        XCTAssertNil(harness.provider.players[afterGoTo2.id])
+        XCTAssertNil(harness.provider.players[afterGoTo3.id])
+        XCTAssertEqual(
+            harness.transport.playheadID, after.id,
+            "the playhead must land on the cue after the FINAL fired target, not any distractor along the chain"
+        )
+    }
+
+    /// D31 fix3: reentrant GoTo→andFire→GoTo must not let the OUTER
+    /// performGoTo's generic chain-advance clobber the INNER GoTo's own
+    /// jump. A distractor sits right after B in document order so a bug
+    /// where A's advance overwrites B's jump is caught (without it, both
+    /// the buggy and fixed code would coincidentally land on the same cue).
+    @MainActor
+    func testInnerGoToRepositioningWinsOverOuterChainAdvance() async {
+        let harness = Harness()
+        let afterA = audioCue("d1")
+        let afterB = audioCue("d2")
+        let c = audioCue("4")
+        var b = Cue(number: "2", body: .goTo(GoToBody(andFire: false)))
+        b.body = .goTo(GoToBody(targetID: c.id, andFire: false))
+        var a = Cue(number: "1", body: .goTo(GoToBody(andFire: true)))
+        a.body = .goTo(GoToBody(targetID: b.id, andFire: true))
+        harness.show.cues = [a, afterA, b, afterB, c]
+        harness.transport.go()
+        await harness.wait(0.05)
+        XCTAssertTrue(harness.warnings.isEmpty, "a legitimate nested GoTo must never warn: \(harness.warnings)")
+        XCTAssertEqual(
+            harness.transport.standingByCue?.id, c.id,
+            "B's own jump to C must win — A's outer generic chain-advance (which would otherwise land on the " +
+            "distractor sitting right after B in document order) must be skipped once the inner GoTo already " +
+            "repositioned the playhead"
+        )
+    }
+
+    /// D31 fix4: a target that EXISTS but isn't a GO-able position (a
+    /// fireAll group's child) must not silently stick the playhead on the
+    /// GoTo cue — it must warn, and GO must still advance past the (now
+    /// inert) GoTo cue exactly like any other warned no-op.
+    @MainActor
+    func testGoToTargetingAFireAllGroupChildWarnsAndGOStillAdvancesNormally() async {
+        let harness = Harness()
+        let group = Cue(number: "2", body: .group(GroupBody(mode: .fireAll)))
+        let child = { var c = audioCue("2.1"); c.parentID = group.id; return c }()
+        let after = audioCue("3")
+        var goTo = Cue(number: "1", body: .goTo(GoToBody(andFire: true)))
+        goTo.body = .goTo(GoToBody(targetID: child.id, andFire: true))
+        harness.show.cues = [goTo, group, child, after]
+        harness.transport.go()
+        await harness.wait(0.05)
+        XCTAssertEqual(harness.warnings.count, 1)
+        XCTAssertTrue(harness.warnings.first?.contains("isn't a GO position") ?? false)
+        XCTAssertEqual(harness.provider.players.count, 0, "the un-placeable target must never be armed/fired")
+        XCTAssertEqual(
+            harness.transport.playheadID, group.id,
+            "GO must still advance past the (now inert) GoTo cue normally — the group header, " +
+            "not the un-placeable child, is next in the GO sequence"
+        )
+    }
+
     // MARK: - Never blocks GO / honors preWait
 
     @MainActor

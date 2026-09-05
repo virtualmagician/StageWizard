@@ -80,6 +80,20 @@ public final class TransportController {
     /// Reset at the top of every `go()` call so a stale `true` never leaks
     /// from a previous press.
     private var goToRepositionedPlayhead = false
+    /// D31 fix: cascade-scoped re-entrancy guard for `performGoTo`. Cycles
+    /// (mutual GoTos, an autoFollow chain that loops back into a GoTo, an
+    /// enter-and-play-first header resolving back to the very GoTo cue that
+    /// targeted it) are fully synchronous on this MainActor call stack — with
+    /// no guard they recurse until stack overflow. Holds the id of every
+    /// GoTo cue currently "in flight" within ONE synchronous GO cascade;
+    /// cleared as each level unwinds (`defer` in `performGoTo`), so it is
+    /// always empty again once GO returns.
+    private var activeGoToChain: Set<UUID> = []
+    /// Hard cap on chain depth, independent of the cycle check above — a
+    /// long but non-repeating chain (no id repeats, so the set-membership
+    /// check never trips) would otherwise still be able to recurse deep
+    /// enough to be a stack-overflow risk of its own.
+    private static let maxGoToChainDepth = 16
     private var panicSettleTask: Task<Void, Never>?
 
     /// Pending auto-continue timers, keyed by source instance id. Pausable.
@@ -140,25 +154,36 @@ public final class TransportController {
     /// empty show) for UI that needs to tell them apart, like the stage display.
     public var isPlayheadPastEnd: Bool { playheadPastEnd }
 
-    public func setPlayhead(_ cueID: UUID?) {
+    /// - Returns: whether the playhead actually moved. A nil `cueID` always
+    ///   moves it (to "nothing standing by") and returns true; a non-nil
+    ///   `cueID` that doesn't resolve to a GO-able position (deleted, or a
+    ///   fireAll/timeline group child that was never a GO-sequence member)
+    ///   silently declines and returns false. `performGoTo` (D31) relies on
+    ///   this return value — reusing this exact logic rather than
+    ///   duplicating it — to warn instead of leaving the playhead stuck.
+    @discardableResult
+    public func setPlayhead(_ cueID: UUID?) -> Bool {
         guard let cueID else {
             playheadID = nil
-            return
+            return true
         }
-        guard let cue = show().cue(withID: cueID) else { return }
+        guard let cue = show().cue(withID: cueID) else { return false }
         // Selecting an enter-group header stands its first child by.
         if case .group(let body) = cue.body, body.mode == .enterAndPlayFirst {
             if let first = show().children(of: cue.id).first {
                 playheadID = first.id
                 playheadPastEnd = false
+                return true
             }
-            return
+            return false
         }
         // Otherwise the playhead stands on any GO-able position.
         if goSequence.contains(where: { $0.id == cueID }) {
             playheadID = cueID
             playheadPastEnd = false
+            return true
         }
+        return false
     }
 
     public func movePlayhead(by delta: Int) {
@@ -242,19 +267,45 @@ public final class TransportController {
 
     /// D31: GoTo cue action — see `CueInstance.runGoToAction`'s doc comment
     /// for why all resolution happens here rather than in ShowRuntime.
+    /// - loop/depth guard (D31 fix): re-entering this function for a GoTo
+    ///   cue already active in the current synchronous cascade, or nesting
+    ///   past `maxGoToChainDepth`, is a warned no-op that stops the chain
+    ///   right there instead of recursing to a stack overflow. This is
+    ///   checked BEFORE any other guard, and does not set
+    ///   `goToRepositionedPlayhead` — the (now inert) GoTo cue that tripped
+    ///   it is still just an ordinary cue as far as GO's generic chain
+    ///   advance is concerned.
     /// - nil target: warned no-op.
     /// - self-target (target == the firing GoTo cue's own id): warned
     ///   no-op — an andFire self-loop would be an infinite GO loop.
     /// - deleted target: warned no-op.
-    /// Otherwise: the playhead ALWAYS moves via `setPlayhead` (which
-    /// resolves an enter-group header to its first child, same as any other
-    /// call). With `andFire`, ALSO fires the resolved target through the
-    /// same `resolveGOTarget` path `fire(cueID:)` uses (re-checking the
-    /// panic guard for safety, though the calling cue was itself fired
-    /// through the normal path so panic is already excluded) and advances
-    /// the playhead past its follow chain exactly like `go()` does, so the
-    /// show stands by the right next cue afterward.
+    /// - target exists but isn't a GO-able position (D31 fix: a fireAll/
+    ///   timeline group child, or an empty enter-group header) — warned
+    ///   no-op via `setPlayhead`'s own return value, so this never silently
+    ///   sticks the playhead on the GoTo cue itself.
+    /// Otherwise: the playhead moves via `setPlayhead` (which resolves an
+    /// enter-group header to its first child, same as any other call). With
+    /// `andFire`, ALSO fires the resolved target through the same
+    /// `resolveGOTarget` path `fire(cueID:)` uses (re-checking the panic
+    /// guard for safety, though the calling cue was itself fired through the
+    /// normal path so panic is already excluded) and advances the playhead
+    /// past its follow chain exactly like `go()` does — UNLESS that fire
+    /// synchronously re-entered this function (the target is itself a GoTo,
+    /// chained via andFire) and already repositioned the playhead itself
+    /// (D31 fix): the same skip-if-inner-repositioned rule `go()` applies to
+    /// itself applies here too, so the innermost GoTo in a chain always wins.
     private func performGoTo(callerID: UUID, callerNumber: String, target: UUID?, andFire: Bool) {
+        guard !activeGoToChain.contains(callerID) else {
+            onOperatorWarning?("Go To \(callerNumber): loop detected — stopped the chain")
+            return
+        }
+        guard activeGoToChain.count < Self.maxGoToChainDepth else {
+            onOperatorWarning?("Go To \(callerNumber): chain too deep (\(Self.maxGoToChainDepth)+ ) — stopped the chain")
+            return
+        }
+        activeGoToChain.insert(callerID)
+        defer { activeGoToChain.remove(callerID) }
+
         guard let target else {
             onOperatorWarning?("Go To \(callerNumber): no target assigned — skipped")
             return
@@ -267,7 +318,10 @@ public final class TransportController {
             onOperatorWarning?("Go To \(callerNumber): target no longer exists — skipped")
             return
         }
-        setPlayhead(target)
+        guard setPlayhead(target) else {
+            onOperatorWarning?("Cue \(callerNumber): GoTo target isn't a GO position — skipped")
+            return
+        }
         // Marks this go() (if that's how we got here) as having already
         // handled the playhead — see the flag's declaration for why that
         // matters. Set unconditionally past this point: even a plain
@@ -275,8 +329,25 @@ public final class TransportController {
         // that overwritten by the generic post-fire advance.
         goToRepositionedPlayhead = true
         guard andFire, !isPanicking, let resolved = resolveGOTarget(raw) else { return }
+
+        // D31 fix: `fire(resolved)` can synchronously re-enter this very
+        // function (the target is itself a GoTo cue, andFire-chained to
+        // another). Snapshot/reset the flag around the call exactly like
+        // `go()` does around ITS OWN `fire(cue)` — that inner call gets its
+        // own chance to reposition the playhead, and if it does, this
+        // level's generic `advancePlayheadPastChain` must NOT run on top of
+        // it (it would clobber the inner jump back to "whatever follows the
+        // fired GoTo in document order").
+        goToRepositionedPlayhead = false
         fire(resolved)
-        advancePlayheadPastChain(from: resolved)
+        if !goToRepositionedPlayhead {
+            advancePlayheadPastChain(from: resolved)
+        }
+        // Either way, THIS level has now repositioned the playhead (directly
+        // via `setPlayhead` above, or via the chain-advance just run) —
+        // record that for whichever caller (`go()`, or an outer
+        // `performGoTo` one level up) resumes next.
+        goToRepositionedPlayhead = true
     }
 
     /// Enter-and-play-first group headers resolve to their first child.

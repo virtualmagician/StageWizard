@@ -1,3 +1,4 @@
+import CoreMIDI
 import XCTest
 @testable import StageWizard
 
@@ -147,6 +148,59 @@ final class MIDISendTests: XCTestCase {
         let plan = MIDIController.plan(for: body)
         XCTAssertEqual(plan.count, 1)
         XCTAssertEqual(plan[0].delay, 0)
+    }
+
+    // MARK: - D30 lifecycle fix: output port/client independence from the listener
+
+    /// Pins the fix directly: `send(_:)` (via `ensureOutputPort`) must create
+    /// its OWN `outputClient`, never borrow the listener's `client` — and
+    /// both must survive `stop()` untouched. Under the original bug,
+    /// `outputClient` stayed zero (the port was created on `client` instead)
+    /// and `stop()`'s `MIDIClientDispose(client)` silently disposed it,
+    /// killing every later `.midiSend` cue and any pending delayed noteOff
+    /// with no operator warning.
+    @MainActor
+    func testOutputClientIsIndependentOfTheListenerAndSurvivesStop() {
+        let controller = MIDIController()
+        controller.start()
+        XCTAssertNotEqual(controller.client, MIDIClientRef(), "the listener's client must exist while running")
+
+        controller.send(MIDISendBody(destinationName: ""))   // triggers ensureOutputPort()
+
+        XCTAssertNotEqual(
+            controller.outputClient, MIDIClientRef(),
+            "send() must create its OWN output client rather than borrowing the listener's — " +
+            "otherwise stop() disposing the listener's client silently kills this one too"
+        )
+        XCTAssertNotEqual(
+            controller.outputClient, controller.client,
+            "the output client must never be the same object as the listener's client"
+        )
+        let outputClientBeforeStop = controller.outputClient
+        let outputPortBeforeStop = controller.outputPort
+
+        controller.stop()
+
+        XCTAssertEqual(controller.client, MIDIClientRef(), "stop() must dispose the LISTENER's client")
+        XCTAssertEqual(
+            controller.outputClient, outputClientBeforeStop,
+            "the output client must be untouched by stop() — it belongs to send(), not the listener"
+        )
+        XCTAssertEqual(
+            controller.outputPort, outputPortBeforeStop,
+            "the output port must survive stop() — a disposed port here means every later MIDI send, " +
+            "and any pending delayed noteOff, silently goes nowhere"
+        )
+    }
+
+    @MainActor
+    func testOutputPortStillCreatableWhenListenerWasNeverStarted() {
+        // The output half must work even when midiEnabled has never been on
+        // — it must not depend on start() ever having run.
+        let controller = MIDIController()
+        XCTAssertEqual(controller.client, MIDIClientRef(), "listener never started")
+        controller.send(MIDISendBody(destinationName: ""))
+        XCTAssertNotEqual(controller.outputClient, MIDIClientRef(), "send must create its own client on demand")
     }
 
     // MARK: - MIDIController.send: destination matching / warnings

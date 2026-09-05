@@ -171,13 +171,30 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   infinite GO loop); MIDI destinationName "" = ALL destinations (valid).
   A noteOn ALWAYS gets its matching noteOff (noteOffAfter, controller-
   owned Task that panic/stop deliberately never cancel — hanging note >
-  late noteOff). GoTo: setPlayhead(target) (+ optional andFire through
-  the guarded fire path + advancePlayheadPastChain); go() clears the
-  goToRepositionedPlayhead flag before EVERY fire and skips its generic
-  chain-advance only when the arm set it — a GoTo's own follows anchor to
-  ITS list position, never the jump target. ATS NSAllowsArbitraryLoads is
-  a DELIBERATE app-wide exemption (show gear speaks plain http on closed
-  LANs — documented in project.yml; don't "fix" it).
+  late noteOff); MIDIController's OUTPUT half owns its own `outputClient`
+  and NEVER borrows the listener's `client` — stop() disposes only the
+  listener's, so a live send/pending noteOff can't be silently killed by
+  toggling MIDI input off. GoTo: setPlayhead(target) (+ optional andFire
+  through the guarded fire path + advancePlayheadPastChain); go() clears
+  the goToRepositionedPlayhead flag before EVERY fire and skips its
+  generic chain-advance only when the arm set it — a GoTo's own follows
+  anchor to ITS list position, never the jump target.
+  D31: performGoTo is guarded against synchronous re-entrancy — a
+  cascade-scoped `activeGoToChain` set (cleared per level via `defer`)
+  warns and stops the chain the instant a GoTo cue's id reappears within
+  one GO cascade (mutual GoTos, an autoFollow loop, a header resolving
+  back to itself), plus a hard depth cap — instead of recursing to a
+  stack overflow; a target that exists but isn't a GO-sequence position
+  (a fireAll/timeline child) is also a warned no-op rather than a silent
+  stuck playhead. OSC's `.waiting` NWConnection state (unreachable host/
+  DNS failure) is treated as FAILURE, not "keep retrying" — Network.
+  framework retries `.waiting` forever with no timeout of its own, and a
+  stale datagram delivered late once the network recovers is a show
+  hazard, so OSCSender warns+cancels immediately, backstopped by a 3 s
+  per-send deadline for any state that never transitions at all. ATS
+  NSAllowsArbitraryLoads is a DELIBERATE app-wide exemption (show gear
+  speaks plain http on closed LANs — documented in project.yml; don't
+  "fix" it).
 - Video/camera/image/slide cues REQUIRE an output group (no implicit
   main-display target) — EXCEPT D25 `CameraBody.sensorOnly`: a camera cue
   running purely as a hand-gesture sensor draws to no output at all, so it
