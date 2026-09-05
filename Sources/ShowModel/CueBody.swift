@@ -13,6 +13,7 @@ public enum CueBody: Hashable, Sendable {
     case fade(FadeBody)
     case stop(StopBody)
     case oscSend(OSCSendBody)
+    case midiSend(MIDISendBody)
     case group(GroupBody)
     case broken(BrokenBody)
 
@@ -35,6 +36,7 @@ public enum CueBody: Hashable, Sendable {
         case .fade: return "Fade"
         case .stop: return "Stop"
         case .oscSend(let body): return body.address != "/" ? body.address : "OSC Send"
+        case .midiSend(let body): return body.defaultName
         case .group(let body): return body.mode == .timeline ? "Timeline Group" : "Group"
         case .broken(let body): return "Unknown cue (\(body.originalType))"
         }
@@ -51,6 +53,7 @@ public enum CueBody: Hashable, Sendable {
         case .fade: return "Fade"
         case .stop: return "Stop"
         case .oscSend: return "OSC Send"
+        case .midiSend: return "MIDI Send"
         case .group: return "Group"
         case .broken: return "Broken"
         }
@@ -74,7 +77,7 @@ public enum CueBody: Hashable, Sendable {
         case .image(let body): return body.outputGroupID
         case .text(let body): return body.outputGroupID
         case .slide(let body): return body.outputGroupID
-        case .audio, .fade, .stop, .oscSend, .group, .broken: return nil
+        case .audio, .fade, .stop, .oscSend, .midiSend, .group, .broken: return nil
         }
     }
 }
@@ -85,7 +88,7 @@ extension CueBody: Codable {
     }
 
     private enum Kind: String, Codable {
-        case audio, video, camera, image, text, slide, fade, stop, oscSend, group
+        case audio, video, camera, image, text, slide, fade, stop, oscSend, midiSend, group
     }
 
     public init(from decoder: Decoder) throws {
@@ -101,6 +104,7 @@ extension CueBody: Codable {
         case .fade: self = .fade(try FadeBody(from: decoder))
         case .stop: self = .stop(try StopBody(from: decoder))
         case .oscSend: self = .oscSend(try OSCSendBody(from: decoder))
+        case .midiSend: self = .midiSend(try MIDISendBody(from: decoder))
         case .group: self = .group(try GroupBody(from: decoder))
         case nil: self = .broken(BrokenBody(originalType: rawType))
         }
@@ -135,6 +139,9 @@ extension CueBody: Codable {
             try body.encode(to: encoder)
         case .oscSend(let body):
             try container.encode(Kind.oscSend, forKey: .type)
+            try body.encode(to: encoder)
+        case .midiSend(let body):
+            try container.encode(Kind.midiSend, forKey: .type)
             try body.encode(to: encoder)
         case .group(let body):
             try container.encode(Kind.group, forKey: .type)
@@ -924,6 +931,83 @@ public struct OSCSendBody: Codable, Hashable, Sendable {
     /// falls back to the default like any other out-of-range authored/decoded value.
     private static func clampedPort(_ raw: UInt16) -> UInt16 {
         raw == 0 ? 8000 : raw
+    }
+}
+
+/// D30: the outbound sibling of D29's OSC Send, and the app's FIRST MIDI
+/// output. GO sends exactly one MIDI 1.0 channel-voice message — note, CC, or
+/// program change — to a MIDI destination. Model-pure — ShowModel stays
+/// CoreMIDI-free; the app converts this into a UMP word at fire time (see
+/// `MIDIController.word(for:)`, the exact inverse of the parser it already
+/// uses for MIDI-In, `MIDIController.messages(fromWords:)`).
+public struct MIDISendBody: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Hashable, Sendable {
+        case noteOn
+        case controlChange
+        case programChange
+    }
+
+    public var kind: Kind
+    /// 0-15; displayed 1-based in the UI, matching the Remote tab's
+    /// MIDI-Learn convention (`MIDIBinding.displayName`).
+    public var channel: UInt8
+    /// Note number / CC number / program number, 0-127.
+    public var number: UInt8
+    /// Velocity (noteOn) or CC value, 0-127; ignored for programChange (the
+    /// UMP word's second data byte is forced to 0 — program change is a
+    /// single-data-byte message).
+    public var value: UInt8
+    /// noteOn only: seconds after the noteOn before the matching noteOff is
+    /// sent automatically, 0...60. A noteOn ALWAYS gets a matching noteOff —
+    /// even 0 still sends one, immediately after — a noteOn with no noteOff
+    /// would hang a synth voice.
+    public var noteOffAfter: TimeInterval
+    /// Destination display name, matched case-insensitively against
+    /// connected destinations at send time; "" = ALL destinations (this is a
+    /// valid, meaningful default — a broadcast — unlike OSCSendBody.host's
+    /// "" which means unconfigured). A non-empty name matching no connected
+    /// destination is a warned no-op (see Preflight / MIDIController.send).
+    public var destinationName: String
+
+    public init(
+        kind: Kind = .noteOn,
+        channel: UInt8 = 0,
+        number: UInt8 = 60,
+        value: UInt8 = 100,
+        noteOffAfter: TimeInterval = 0.1,
+        destinationName: String = ""
+    ) {
+        self.kind = kind
+        self.channel = min(channel, 15)
+        self.number = min(number, 127)
+        self.value = min(value, 127)
+        self.noteOffAfter = min(max(noteOffAfter, 0), 60)
+        self.destinationName = destinationName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, channel, number, value, noteOffAfter, destinationName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .noteOn
+        channel = min(try c.decodeIfPresent(UInt8.self, forKey: .channel) ?? 0, 15)
+        number = min(try c.decodeIfPresent(UInt8.self, forKey: .number) ?? 60, 127)
+        value = min(try c.decodeIfPresent(UInt8.self, forKey: .value) ?? 100, 127)
+        noteOffAfter = min(max(try c.decodeIfPresent(TimeInterval.self, forKey: .noteOffAfter) ?? 0.1, 0), 60)
+        destinationName = try c.decodeIfPresent(String.self, forKey: .destinationName) ?? ""
+    }
+
+    /// "Note 60 ch 1" / "CC 7 ch 1" / "Prog 5 ch 1" — mirrors
+    /// `MIDIBinding.displayName`'s 1-based channel convention exactly (the
+    /// wire value is 0-15; every DAW/controller shows 1-16).
+    public var defaultName: String {
+        switch kind {
+        case .noteOn: return "Note \(number) ch \(channel + 1)"
+        case .controlChange: return "CC \(number) ch \(channel + 1)"
+        case .programChange: return "Prog \(number) ch \(channel + 1)"
+        }
     }
 }
 

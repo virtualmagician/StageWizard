@@ -341,6 +341,66 @@ final class PreflightTests: XCTestCase {
         XCTAssertTrue(issues.isEmpty, "disarmed cues skip the OSC checks entirely, like output/device checks: \(issues)")
     }
 
+    // MARK: - D30: MIDI Send cues
+
+    func testArmedMIDICueWithUnmatchedDestinationNameIsWarning() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .midiSend(MIDISendBody(destinationName: "Nonexistent Synth")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: [],
+            midiDestinations: ["Some Other Device"]
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .warning)
+        XCTAssertTrue(issues.first?.message.contains("Nonexistent Synth") ?? false)
+        XCTAssertTrue(issues.first?.message.contains("is not connected") ?? false)
+    }
+
+    func testArmedMIDICueWithMatchingDestinationNameHasNoIssueCaseInsensitively() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .midiSend(MIDISendBody(destinationName: "iac driver bus 1")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: [],
+            midiDestinations: ["IAC Driver Bus 1"]
+        )
+        XCTAssertTrue(issues.isEmpty, "a case-insensitive match must not warn: \(issues)")
+    }
+
+    func testArmedMIDICueWithEmptyDestinationNameHasNoIssueEvenWithNoDestinations() {
+        // "" = ALL destinations — unlike OSC's empty host, this is a valid
+        // configuration, never an error or a warning.
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .midiSend(MIDISendBody(destinationName: "")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: [],
+            midiDestinations: []
+        )
+        XCTAssertTrue(issues.isEmpty, "an empty (ALL) destination name is never flagged: \(issues)")
+    }
+
+    func testDisarmedMIDICueWithUnmatchedDestinationNameSkipsCheckEntirely() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", armed: false, body: .midiSend(MIDISendBody(destinationName: "Nonexistent Synth")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: [],
+            midiDestinations: []
+        )
+        XCTAssertTrue(issues.isEmpty, "disarmed cues skip the MIDI check entirely, like output/device checks: \(issues)")
+    }
+
+    func testMIDIDestinationsParameterDefaultsToEmptyWhenOmitted() {
+        // Existing call sites (and every other test above) don't pass this
+        // parameter at all — a non-empty configured destination must still
+        // warn rather than silently matching everything.
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .midiSend(MIDISendBody(destinationName: "Nonexistent Synth")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .warning)
+    }
+
     func testStageDisplayCollisionWarningDefaultsToFalseWhenOmitted() {
         // Existing call sites (and every other test above) don't pass this
         // parameter at all — it must default to "no collision", not crash

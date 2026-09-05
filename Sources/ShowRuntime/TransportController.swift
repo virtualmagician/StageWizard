@@ -55,6 +55,12 @@ public final class TransportController {
     /// included) keeps compiling unchanged; AppModel wires the real
     /// UDP-sending closure (see `OSCSender`).
     private let oscSend: (OSCSendBody) -> Void
+    /// D30: fire-and-forget MIDI send for `.midiSend` cues — injected next
+    /// to `oscSend`, same reasoning (ShowRuntime stays CoreMIDI-free;
+    /// defaults to a no-op so every existing call site, tests included,
+    /// keeps compiling unchanged; AppModel wires the real
+    /// `MIDIController.send`).
+    private let midiSend: (MIDISendBody) -> Void
 
     private var lastGoAt: ContinuousClock.Instant?
     private var lastPanicAt: ContinuousClock.Instant?
@@ -74,12 +80,14 @@ public final class TransportController {
         provider: CuePlayerProviding,
         show: @escaping () -> ShowFile,
         showFolder: @escaping () -> URL?,
-        oscSend: @escaping (OSCSendBody) -> Void = { _ in }
+        oscSend: @escaping (OSCSendBody) -> Void = { _ in },
+        midiSend: @escaping (MIDISendBody) -> Void = { _ in }
     ) {
         self.provider = provider
         self.show = show
         self.showFolder = showFolder
         self.oscSend = oscSend
+        self.midiSend = midiSend
     }
 
     private var settings: ShowSettings { show().settings }
@@ -279,7 +287,8 @@ public final class TransportController {
             activeInstances: { [weak self] in self?.registry.instances ?? [] },
             childrenOf: { [weak self] id in self?.show().children(of: id) ?? [] },
             warn: { [weak self] message in self?.onOperatorWarning?(message) },
-            oscSend: oscSend
+            oscSend: oscSend,
+            midiSend: midiSend
         )
         let instance = CueInstance(cue: cue, environment: environment)
         instance.onChildSpawned = { [weak self] child in

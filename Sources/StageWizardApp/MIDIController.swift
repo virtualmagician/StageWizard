@@ -46,16 +46,37 @@ final class MIDIController {
     var learning = false
     var onLearned: (@MainActor (MIDIBinding) -> Void)?
 
+    /// D30: one operator warning per `.midiSend` cue whose configured
+    /// destination name matches no connected destination — wired by
+    /// AppModel, same shape as `OSCSender.onWarning`. The cue has already
+    /// completed by the time this can fire; purely informational.
+    var onWarning: (@MainActor (String) -> Void)?
+
     /// Connected source display names, for the Remote settings tab.
     private(set) var sources: [String] = []
+    /// D30: connected destination display names, for the MIDI Send cue's
+    /// destination picker and Preflight — refreshed on setup change exactly
+    /// like `sources`, regardless of whether the input listener is running.
+    private(set) var destinations: [String] = []
 
     @ObservationIgnored private var client = MIDIClientRef()
     @ObservationIgnored private var inputPort = MIDIPortRef()
     @ObservationIgnored private var connectedSources: Set<MIDIEndpointRef> = []
     @ObservationIgnored private var running = false
     @ObservationIgnored private var ccTracker = CCTransitionTracker()
+    /// D30: output half — created lazily on first `send(_:)` call, entirely
+    /// independent of `client`/`inputPort`/`running` above (which are the
+    /// LISTENER's, gated by `midiEnabled`). Sending must work even when the
+    /// listener is disabled, so this never touches `running`.
+    @ObservationIgnored private var outputClient = MIDIClientRef()
+    @ObservationIgnored private var outputPort = MIDIPortRef()
 
-    init() {}
+    init() {
+        // D30: destinations are a plain global CoreMIDI query — no client or
+        // port needed to LIST them (only to send), so the picker/Preflight
+        // have a live list from launch, independent of `midiEnabled`.
+        refreshDestinations()
+    }
 
     // MARK: - Lifecycle (owned by AppModel: started/stopped with settings.midiEnabled)
 
@@ -69,7 +90,7 @@ final class MIDIController {
             // Setup change (device plugged/unplugged) — arrives on a CoreMIDI
             // notification thread. Hop before touching any state.
             Task { @MainActor in
-                self?.refreshSources()
+                self?.handleMIDISetupChanged()
             }
         }
         guard clientStatus == noErr else { return }
@@ -142,6 +163,201 @@ final class MIDIController {
             return "MIDI Source"
         }
         return name as String
+    }
+
+    /// D30: enumerate every current MIDI destination for the Send cue's
+    /// picker and Preflight. No client/port required — `MIDIGetNumberOf
+    /// Destinations`/`MIDIGetDestination` are plain global queries; only
+    /// SENDING needs the output port (see `ensureOutputPort`).
+    private func refreshDestinations() {
+        var names: [String] = []
+        let count = MIDIGetNumberOfDestinations()
+        for index in 0..<count {
+            let destination = MIDIGetDestination(index)
+            guard destination != 0 else { continue }
+            names.append(Self.displayName(for: destination))
+        }
+        destinations = names
+    }
+
+    /// Shared MIDI setup-change (hot-plug) handler for BOTH the listener's
+    /// client (`start()`) and the output-only client `ensureOutputPort` may
+    /// lazily create — at most one of the two ever exists at a time (see
+    /// `ensureOutputPort`), but either one's notification refreshes both
+    /// lists; `refreshSources()` is a no-op while the listener isn't running.
+    private func handleMIDISetupChanged() {
+        refreshSources()
+        refreshDestinations()
+    }
+
+    // MARK: - MIDI Send output (D30: the app's first MIDI output)
+
+    /// Lazily create the output port `send(_:)` uses. Sending must work even
+    /// when the LISTENER (`midiEnabled`) is off, so this is entirely
+    /// decoupled from `running`/`client`/`inputPort`: it reuses the
+    /// listener's client if one is already running (one client, two ports —
+    /// input and output), or creates a small output-only client on first
+    /// send otherwise. Returns nil only if CoreMIDI itself refuses.
+    private func ensureOutputPort() -> MIDIPortRef? {
+        if outputPort != MIDIPortRef() { return outputPort }
+
+        let clientToUse: MIDIClientRef
+        if client != MIDIClientRef() {
+            clientToUse = client
+        } else if outputClient != MIDIClientRef() {
+            clientToUse = outputClient
+        } else {
+            var newClient = MIDIClientRef()
+            let status = MIDIClientCreateWithBlock("StageWizard Output" as CFString, &newClient) { @Sendable [weak self] _ in
+                Task { @MainActor in
+                    self?.handleMIDISetupChanged()
+                }
+            }
+            guard status == noErr else { return nil }
+            outputClient = newClient
+            clientToUse = newClient
+        }
+
+        var newPort = MIDIPortRef()
+        guard MIDIOutputPortCreate(clientToUse, "StageWizard Output" as CFString, &newPort) == noErr else { return nil }
+        outputPort = newPort
+        return outputPort
+    }
+
+    private var outputPortIfReady: MIDIPortRef? {
+        outputPort != MIDIPortRef() ? outputPort : nil
+    }
+
+    /// D30: send one MIDI message for a `.midiSend` cue — the outbound
+    /// sibling of the listener above, and the app's FIRST MIDI output.
+    /// `body.destinationName` empty sends to every connected destination; a
+    /// non-empty name matching nothing is a warned no-op (mirrors
+    /// `OSCSender`'s failed-send warning). NoteOn's matching noteOff is
+    /// scheduled here — owned by this controller, not by the cue (which has
+    /// already completed by fire time; see `CueInstance.runMIDISendAction`)
+    /// — and deliberately NEVER cancelled: a stuck note is worse than a late
+    /// noteOff, so panic/Stop All must not leave one hanging.
+    func send(_ body: MIDISendBody) {
+        guard let port = ensureOutputPort() else { return }
+        let targets = Self.matchingDestinations(named: body.destinationName)
+        guard !targets.isEmpty else {
+            if !body.destinationName.isEmpty {
+                onWarning?("MIDI: no connected destination named “\(body.destinationName)” — message not sent")
+            }
+            return
+        }
+        let destinationName = body.destinationName
+        for (word, delay) in Self.plan(for: body) {
+            if delay <= 0 {
+                for destination in targets {
+                    Self.sendWord(word, port: port, destination: destination)
+                }
+            } else {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled, let self, let port = self.outputPortIfReady else { return }
+                    // Re-resolve by name at send time rather than reusing the
+                    // captured `targets` — a device unplugged/replugged
+                    // during the wait is handled the same way a live send is.
+                    for destination in Self.matchingDestinations(named: destinationName) {
+                        Self.sendWord(word, port: port, destination: destination)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Pure MIDI Send construction (D30: nonisolated + static — the
+    // unit-testable core, no actor hop needed since these touch no state)
+
+    /// MIDI 1.0 channel-voice UMP word for `body` — the exact inverse of
+    /// `messages(fromWords:)`'s own parsing (message-type nibble 0x2, status
+    /// byte in bits 23-16, data1 in bits 15-8, data2 in bits 7-0).
+    /// programChange forces data2 to 0 — it's a single-data-byte message;
+    /// `messages(fromWords:)` has no 0xC parsing arm, so this word is
+    /// send-only and can't round-trip through the parser (pinned against a
+    /// hand-computed constant in MIDISendTests instead).
+    nonisolated static func word(for body: MIDISendBody) -> UInt32 {
+        let statusNibble: UInt8
+        let data2: UInt8
+        switch body.kind {
+        case .noteOn:
+            statusNibble = 0x9
+            data2 = body.value & 0x7F
+        case .controlChange:
+            statusNibble = 0xB
+            data2 = body.value & 0x7F
+        case .programChange:
+            statusNibble = 0xC
+            data2 = 0
+        }
+        return word(statusNibble: statusNibble, channel: body.channel, data1: body.number & 0x7F, data2: data2)
+    }
+
+    /// The matching noteOff for a noteOn: status 0x8n with velocity 64 (a
+    /// real noteOff status, not a noteOn-with-velocity-0 — "cleanest" per
+    /// D30's design).
+    nonisolated static func noteOffWord(channel: UInt8, number: UInt8) -> UInt32 {
+        word(statusNibble: 0x8, channel: channel, data1: number & 0x7F, data2: 64)
+    }
+
+    nonisolated private static func word(statusNibble: UInt8, channel: UInt8, data1: UInt8, data2: UInt8) -> UInt32 {
+        let statusByte = (statusNibble << 4) | (channel & 0x0F)
+        return (UInt32(2) << 28) | (UInt32(statusByte) << 16) | (UInt32(data1) << 8) | UInt32(data2)
+    }
+
+    /// D30: pure decision — which UMP words a `.midiSend` cue produces, and
+    /// at what delay (seconds) after fire. noteOn always yields TWO entries
+    /// (the noteOn immediately, its matching noteOff after `noteOffAfter` —
+    /// a noteOn with no noteOff would hang a synth voice); controlChange and
+    /// programChange yield exactly one. `send(_:)` drives its scheduling
+    /// entirely from this — directly unit-testable without CoreMIDI.
+    nonisolated static func plan(for body: MIDISendBody) -> [(word: UInt32, delay: TimeInterval)] {
+        let onWord = word(for: body)
+        switch body.kind {
+        case .noteOn:
+            return [(onWord, 0), (noteOffWord(channel: body.channel, number: body.number), body.noteOffAfter)]
+        case .controlChange, .programChange:
+            return [(onWord, 0)]
+        }
+    }
+
+    /// Destinations whose display name matches `name` case-insensitively;
+    /// "" matches every connected destination (ALL).
+    private static func matchingDestinations(named name: String) -> [MIDIEndpointRef] {
+        var result: [MIDIEndpointRef] = []
+        let count = MIDIGetNumberOfDestinations()
+        for index in 0..<count {
+            let destination = MIDIGetDestination(index)
+            guard destination != 0 else { continue }
+            if name.isEmpty || displayName(for: destination).caseInsensitiveCompare(name) == .orderedSame {
+                result.append(destination)
+            }
+        }
+        return result
+    }
+
+    /// Send one already-built UMP word through `port` to `destination`, via
+    /// the MIDIEventList protocol — mirrors the receive side's
+    /// `words(from:)` in reverse: `MIDIEventListInit`/`MIDIEventListAdd`
+    /// build a one-packet, one-word list, and `MIDISendEventList` hands it
+    /// to CoreMIDI. Fire-and-forget: the OSStatus result is deliberately
+    /// ignored, matching `send`'s own "no destination validation here"
+    /// contract for a stale/bad destination.
+    private static func sendWord(_ word: UInt32, port: MIDIPortRef, destination: MIDIEndpointRef) {
+        var eventList = MIDIEventList()
+        var packet = MIDIEventListInit(&eventList, ._1_0)
+        var words: [UInt32] = [word]
+        packet = MIDIEventListAdd(
+            &eventList,
+            MemoryLayout<MIDIEventList>.size,
+            packet,
+            0,
+            words.count,
+            &words
+        )
+        _ = packet
+        _ = MIDISendEventList(port, destination, &eventList)
     }
 
     // MARK: - Dispatch (MainActor)

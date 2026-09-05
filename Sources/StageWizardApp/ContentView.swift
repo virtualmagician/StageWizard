@@ -76,6 +76,7 @@ struct ContentView: View {
                 Button("Fade Cue") { CueFactory.addControlCue(.fade(FadeBody()), to: document) }
                 Button("Stop Cue") { CueFactory.addControlCue(.stop(StopBody()), to: document) }
                 Button("OSC Cue") { CueFactory.addControlCue(.oscSend(OSCSendBody()), to: document) }
+                Button("MIDI Cue") { CueFactory.addControlCue(.midiSend(MIDISendBody()), to: document) }
                 Button("Group") { CueFactory.addControlCue(.group(GroupBody()), to: document) }
             } label: {
                 Label("Add Cue", systemImage: "plus")

@@ -115,7 +115,8 @@ private struct GeneralSettingsTab: View {
             cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
             virtualCamFeeding: app.virtualCamera.isFeeding,
             connectedDevices: AudioDeviceManager.shared.outputDevices,
-            stageDisplayCoversOperatorScreen: app.stageDisplayCoversOperatorScreen
+            stageDisplayCoversOperatorScreen: app.stageDisplayCoversOperatorScreen,
+            midiDestinations: app.midiController.destinations
         )
     }
 }

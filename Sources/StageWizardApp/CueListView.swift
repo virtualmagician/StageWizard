@@ -541,6 +541,7 @@ func typeSymbol(_ body: CueBody) -> String {
     case .fade: return "dial.low"
     case .stop: return "stop.fill"
     case .oscSend: return "dot.radiowaves.right"
+    case .midiSend: return "pianokeys"
     case .group: return "folder"
     case .broken: return "exclamationmark.triangle"
     }

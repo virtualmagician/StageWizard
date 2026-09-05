@@ -27,7 +27,7 @@ struct InspectorView: View {
             case .camera: return [.basics, .timeAndLevels, .geometry, .output, .effects, .triggers]
             case .video, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .text: return [.basics, .text, .timeAndLevels, .geometry, .output, .triggers]
-            case .fade, .stop, .oscSend: return [.basics, .timeAndLevels, .triggers]
+            case .fade, .stop, .oscSend, .midiSend: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
         }
@@ -404,6 +404,8 @@ private struct TimeAndLevelsTab: View {
             StopForm(cueID: cueID)
         case .oscSend:
             OSCSendForm(cueID: cueID)
+        case .midiSend:
+            MIDISendForm(cueID: cueID)
         case .group:
             GroupTimelineTab(cueID: cueID)   // not reachable via tabs; safe fallback
         case .broken:
@@ -1299,6 +1301,134 @@ private struct OSCArgumentsEditor: View {
     }
 }
 
+/// D30: MIDI Send cue — the outbound sibling of D29's OSC Send, and the
+/// app's first MIDI output. GO sends exactly one MIDI message when the cue
+/// fires; see `ShowRuntime.CueInstance.runMIDISendAction` and
+/// `MIDIController.send`.
+private struct MIDISendForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    @Environment(AppModel.self) private var app
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .midiSend(let midi) = cue.body {
+            Form {
+                Picker("Kind", selection: Binding(
+                    get: { midi.kind },
+                    set: { v in update { $0.kind = v } }
+                )) {
+                    Text("Note").tag(MIDISendBody.Kind.noteOn)
+                    Text("Control Change").tag(MIDISendBody.Kind.controlChange)
+                    Text("Program Change").tag(MIDISendBody.Kind.programChange)
+                }
+
+                Stepper(
+                    "Channel: \(midi.channel + 1)",
+                    value: Binding(
+                        get: { Int(midi.channel) + 1 },
+                        set: { v in update { $0.channel = UInt8(min(max(v, 1), 16) - 1) } }
+                    ),
+                    in: 1...16
+                )
+
+                TextField(
+                    numberLabel(for: midi.kind),
+                    value: Binding(
+                        get: { Int(midi.number) },
+                        set: { v in update { $0.number = Self.clamped7Bit(v) } }
+                    ),
+                    format: .number.grouping(.never)
+                )
+                .frame(width: 90)
+
+                if midi.kind != .programChange {
+                    TextField(
+                        midi.kind == .noteOn ? "Velocity" : "Value",
+                        value: Binding(
+                            get: { Int(midi.value) },
+                            set: { v in update { $0.value = Self.clamped7Bit(v) } }
+                        ),
+                        format: .number.grouping(.never)
+                    )
+                    .frame(width: 90)
+                }
+
+                if midi.kind == .noteOn {
+                    TextField(
+                        "Note Length (s)",
+                        value: Binding(
+                            get: { midi.noteOffAfter },
+                            set: { v in update { $0.noteOffAfter = min(max(v, 0), 60) } }
+                        ),
+                        format: .number
+                    )
+                    .frame(width: 90)
+                    Text("A matching noteOff always follows — even at 0s — so this note never hangs.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Picker("Destination", selection: Binding(
+                    get: { midi.destinationName },
+                    set: { v in update { $0.destinationName = v } }
+                )) {
+                    Text("All Destinations").tag("")
+                    ForEach(app.midiController.destinations, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                    // Keep a saved-but-disconnected destination selectable so
+                    // the Picker's selection stays valid and the choice isn't
+                    // lost — mirrors AudioOutputSettingsView's device picker.
+                    if !midi.destinationName.isEmpty, !isConnected(midi.destinationName) {
+                        Text("\(midi.destinationName) (not connected)").tag(midi.destinationName)
+                    }
+                }
+
+                if !midi.destinationName.isEmpty, !isConnected(midi.destinationName) {
+                    Label {
+                        Text("“\(midi.destinationName)” is not connected. This cue won't send anything until it is.")
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                    .font(.callout)
+                }
+
+                Text("Sends one MIDI message when the cue fires. Fire-and-forget — the show never waits on the device.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func numberLabel(for kind: MIDISendBody.Kind) -> String {
+        switch kind {
+        case .noteOn: return "Note"
+        case .controlChange: return "Controller"
+        case .programChange: return "Program"
+        }
+    }
+
+    private func isConnected(_ name: String) -> Bool {
+        app.midiController.destinations.contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    private func update(_ change: (inout MIDISendBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .midiSend(var b) = cue.body {
+                change(&b)
+                cue.body = .midiSend(b)
+            }
+        }
+    }
+
+    private static func clamped7Bit(_ raw: Int) -> UInt8 {
+        UInt8(min(max(raw, 0), 127))
+    }
+}
+
 /// Picks another cue in the show as a fade/stop target.
 struct CueTargetPicker: View {
     @Environment(ShowDocumentController.self) private var document
@@ -1322,7 +1452,7 @@ extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
         case .audio, .video, .camera, .image, .text, .slide, .group: return true
-        case .fade, .stop, .oscSend, .broken: return false
+        case .fade, .stop, .oscSend, .midiSend, .broken: return false
         }
     }
 }

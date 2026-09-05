@@ -32,7 +32,8 @@ enum Preflight {
         cameraAuthorized: Bool,
         virtualCamFeeding: Bool,
         connectedDevices: [AudioOutputDevice],
-        stageDisplayCoversOperatorScreen: Bool = false
+        stageDisplayCoversOperatorScreen: Bool = false,
+        midiDestinations: [String] = []
     ) -> [PreflightIssue] {
         var issues: [PreflightIssue] = []
         // Ordered (not a Set) so issue order is stable — nice for tests and
@@ -113,6 +114,19 @@ enum Preflight {
                         severity: .warning
                     ))
                 }
+            }
+
+            // 9. D30: MIDI Send cues with a configured (non-empty) destination
+            // name that matches no CURRENTLY connected destination — a
+            // warning, not an error, since "" (ALL destinations) is a valid
+            // configuration and the named gear may simply arrive later.
+            if case .midiSend(let midi) = cue.body, !midi.destinationName.isEmpty,
+               !midiDestinations.contains(where: { $0.caseInsensitiveCompare(midi.destinationName) == .orderedSame }) {
+                issues.append(PreflightIssue(
+                    cueNumber: cue.number,
+                    message: "Cue \(cue.number): MIDI destination “\(midi.destinationName)” is not connected",
+                    severity: .warning
+                ))
             }
         }
 

@@ -83,6 +83,15 @@ public final class CueInstance: Identifiable {
         /// app-layer closure AppModel wires into TransportController.init,
         /// mirroring the `show`/`showFolder` injection pattern.
         let oscSend: (OSCSendBody) -> Void
+        /// D30: fire-and-forget MIDI send for `.midiSend` cues — the
+        /// outbound sibling of `oscSend`, injected the same way. UNLIKE
+        /// oscSend there is no destination validation here: an empty
+        /// `destinationName` is a valid "send to ALL destinations", not an
+        /// unconfigured state, so this arm stays dumb (call it and complete)
+        /// exactly like oscSend's arm — the app-layer `MIDIController` is the
+        /// one place that resolves destinations and warns on a name match
+        /// failure.
+        let midiSend: (MIDISendBody) -> Void
     }
 
     init(cue: Cue, environment: RuntimeEnvironment, preArmedPlayer: MediaPlayback? = nil) {
@@ -156,6 +165,10 @@ public final class CueInstance: Identifiable {
             finish(.completed)
         case .oscSend(let body):
             runOSCSendAction(body)
+            completeAction()
+            finish(.completed)
+        case .midiSend(let body):
+            runMIDISendAction(body)
             completeAction()
             finish(.completed)
         case .group(let body):
@@ -307,6 +320,20 @@ public final class CueInstance: Identifiable {
             return
         }
         environment.oscSend(body)
+    }
+
+    // MARK: - MIDI send action (D30)
+
+    /// The outbound sibling of `runOSCSendAction`: fire one MIDI message,
+    /// fire-and-forget, completing synchronously right here — GO never waits
+    /// on it. Deliberately dumb, with NO destination validation: an empty
+    /// `destinationName` means "send to every connected destination", a
+    /// perfectly valid configuration, not an unconfigured one — so unlike
+    /// `runOSCSendAction` there is nothing to warn about here. Destination
+    /// name matching (and the "no match" warning) lives entirely in the
+    /// app-layer `MIDIController.send`.
+    private func runMIDISendAction(_ body: MIDISendBody) {
+        environment.midiSend(body)
     }
 
     private func resolveTargets(_ targetID: UUID?) -> [CueInstance] {

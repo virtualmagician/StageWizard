@@ -139,7 +139,8 @@ final class AppModel {
             cameraAuthorized: AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
             virtualCamFeeding: virtualCamera.isFeeding,
             connectedDevices: AudioDeviceManager.shared.outputDevices,
-            stageDisplayCoversOperatorScreen: stageDisplayCoversOperatorScreen
+            stageDisplayCoversOperatorScreen: stageDisplayCoversOperatorScreen,
+            midiDestinations: midiController.destinations
         )
         guard let firstError = issues.first(where: { $0.severity == .error }) else { return }
         let more = issues.count > 1 ? " (+\(issues.count - 1) more — Settings → General → Preflight)" : ""
@@ -169,7 +170,8 @@ final class AppModel {
             provider: provider,
             show: { document.show },
             showFolder: { document.showFolder },
-            oscSend: { body in oscSender.send(body) }
+            oscSend: { body in oscSender.send(body) },
+            midiSend: { [midiController] body in midiController.send(body) }
         )
         self.shortcuts = ShortcutManager()
         wire()
@@ -186,6 +188,9 @@ final class AppModel {
             self?.pushWarning(message)
         }
         oscSender.onWarning = { [weak self] message in
+            self?.pushWarning(message)
+        }
+        midiController.onWarning = { [weak self] message in
             self?.pushWarning(message)
         }
         document.onRecentsChanged = { [weak self] in
