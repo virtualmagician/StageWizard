@@ -110,6 +110,10 @@ struct ShowCommands: Commands {
                 .disabled(app.isShowMode)
             Button("Add MIDI Cue") { CueFactory.addControlCue(.midiSend(MIDISendBody()), to: document) }
                 .disabled(app.isShowMode)
+            Button("Add Go To Cue") { CueFactory.addControlCue(.goTo(GoToBody()), to: document) }
+                .disabled(app.isShowMode)
+            Button("Add HTTP Cue") { CueFactory.addControlCue(.httpRequest(HTTPRequestBody()), to: document) }
+                .disabled(app.isShowMode)
             Button("Add Group") { CueFactory.addControlCue(.group(GroupBody()), to: document) }
                 .keyboardShortcut("6", modifiers: [.command, .shift])
                 .disabled(app.isShowMode)

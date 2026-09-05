@@ -329,6 +329,16 @@ struct CueRowView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.red)
                 .help("No destination host set — set one in the inspector")
+        } else if isGoToUnconfigured(cue) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.red)
+                .help("No valid target cue — set one in the inspector")
+        } else if isHTTPUnconfigured(cue) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.red)
+                .help("No URL set — set one in the inspector")
         } else if isActiveGroupRow(cue) {
             Image(systemName: "waveform")
                 .font(.system(size: 10))
@@ -414,6 +424,7 @@ struct CueRowView: View {
         let targetID: UUID? = switch cue.body {
         case .fade(let body): body.targetID
         case .stop(let body): body.targetID
+        case .goTo(let body): body.targetID
         default: nil
         }
         guard let targetID else {
@@ -492,6 +503,21 @@ struct CueRowView: View {
         return body.host.isEmpty
     }
 
+    /// D31: a GoTo cue with no target, a deleted target, or a self-target
+    /// (all warned no-ops at fire — see TransportController.performGoTo).
+    private func isGoToUnconfigured(_ cue: Cue) -> Bool {
+        guard case .goTo(let body) = cue.body else { return false }
+        guard let target = body.targetID else { return true }
+        if target == cue.id { return true }
+        return document.show.cue(withID: target) == nil
+    }
+
+    /// D31: an HTTP Request cue with no URL configured yet.
+    private func isHTTPUnconfigured(_ cue: Cue) -> Bool {
+        guard case .httpRequest(let body) = cue.body else { return false }
+        return body.urlString.isEmpty
+    }
+
     private func isMediaBroken(_ cue: Cue) -> Bool {
         let media: MediaReference? = switch cue.body {
         case .audio(let body): body.media
@@ -542,6 +568,8 @@ func typeSymbol(_ body: CueBody) -> String {
     case .stop: return "stop.fill"
     case .oscSend: return "dot.radiowaves.right"
     case .midiSend: return "pianokeys"
+    case .goTo: return "arrow.turn.down.right"
+    case .httpRequest: return "globe"
     case .group: return "folder"
     case .broken: return "exclamationmark.triangle"
     }

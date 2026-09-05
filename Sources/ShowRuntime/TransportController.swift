@@ -61,9 +61,25 @@ public final class TransportController {
     /// keeps compiling unchanged; AppModel wires the real
     /// `MIDIController.send`).
     private let midiSend: (MIDISendBody) -> Void
+    /// D31: fire-and-forget HTTP request for `.httpRequest` cues — injected
+    /// next to oscSend/midiSend, same reasoning (ShowRuntime stays
+    /// URLSession-free; defaults to a no-op so every existing call site,
+    /// tests included, keeps compiling unchanged; AppModel wires the real
+    /// `HTTPRequestSender.send`).
+    private let httpRequest: (HTTPRequestBody) -> Void
 
     private var lastGoAt: ContinuousClock.Instant?
     private var lastPanicAt: ContinuousClock.Instant?
+    /// D31: set by `performGoTo` whenever it actually repositions the
+    /// playhead (the nil/self/deleted-target guards leave it false). `go()`
+    /// checks this right after firing so it can skip its OWN generic
+    /// "advance past the auto-continuing chain" step below — without this,
+    /// that step would run a SECOND time using the just-fired GoTo cue's own
+    /// (default `.none`) follow and clobber the jump back to "whatever comes
+    /// after this GoTo cue in document order", defeating the whole feature.
+    /// Reset at the top of every `go()` call so a stale `true` never leaks
+    /// from a previous press.
+    private var goToRepositionedPlayhead = false
     private var panicSettleTask: Task<Void, Never>?
 
     /// Pending auto-continue timers, keyed by source instance id. Pausable.
@@ -81,13 +97,15 @@ public final class TransportController {
         show: @escaping () -> ShowFile,
         showFolder: @escaping () -> URL?,
         oscSend: @escaping (OSCSendBody) -> Void = { _ in },
-        midiSend: @escaping (MIDISendBody) -> Void = { _ in }
+        midiSend: @escaping (MIDISendBody) -> Void = { _ in },
+        httpRequest: @escaping (HTTPRequestBody) -> Void = { _ in }
     ) {
         self.provider = provider
         self.show = show
         self.showFolder = showFolder
         self.oscSend = oscSend
         self.midiSend = midiSend
+        self.httpRequest = httpRequest
     }
 
     private var settings: ShowSettings { show().settings }
@@ -186,7 +204,20 @@ public final class TransportController {
         guard let standing = standingByCue else { return }
         guard let cue = resolveGOTarget(standing) else { return }
         lastGoAt = now
+        goToRepositionedPlayhead = false
         fire(cue)
+        // D31: a GoTo cue's arm already repositioned the playhead itself
+        // (setPlayhead, and — with andFire — fire+advancePlayheadPastChain
+        // on the jump target) — see `performGoTo`. Applying the generic
+        // chain-skip below on TOP of that would clobber it back to "the
+        // cue after this GoTo in document order". A GoTo that warned-and-
+        // did-nothing (nil/self/deleted target) never sets the flag, so GO
+        // still advances normally past it, exactly like any other inert
+        // action cue.
+        if goToRepositionedPlayhead {
+            goToRepositionedPlayhead = false
+            return
+        }
         advancePlayheadPastChain(from: cue)
     }
 
@@ -207,6 +238,45 @@ public final class TransportController {
         guard !isPanicking, let raw = show().cue(withID: cueID),
               let cue = resolveGOTarget(raw) else { return }
         fire(cue)
+    }
+
+    /// D31: GoTo cue action — see `CueInstance.runGoToAction`'s doc comment
+    /// for why all resolution happens here rather than in ShowRuntime.
+    /// - nil target: warned no-op.
+    /// - self-target (target == the firing GoTo cue's own id): warned
+    ///   no-op — an andFire self-loop would be an infinite GO loop.
+    /// - deleted target: warned no-op.
+    /// Otherwise: the playhead ALWAYS moves via `setPlayhead` (which
+    /// resolves an enter-group header to its first child, same as any other
+    /// call). With `andFire`, ALSO fires the resolved target through the
+    /// same `resolveGOTarget` path `fire(cueID:)` uses (re-checking the
+    /// panic guard for safety, though the calling cue was itself fired
+    /// through the normal path so panic is already excluded) and advances
+    /// the playhead past its follow chain exactly like `go()` does, so the
+    /// show stands by the right next cue afterward.
+    private func performGoTo(callerID: UUID, callerNumber: String, target: UUID?, andFire: Bool) {
+        guard let target else {
+            onOperatorWarning?("Go To \(callerNumber): no target assigned — skipped")
+            return
+        }
+        guard target != callerID else {
+            onOperatorWarning?("Go To \(callerNumber): target is this cue — skipped")
+            return
+        }
+        guard let raw = show().cue(withID: target) else {
+            onOperatorWarning?("Go To \(callerNumber): target no longer exists — skipped")
+            return
+        }
+        setPlayhead(target)
+        // Marks this go() (if that's how we got here) as having already
+        // handled the playhead — see the flag's declaration for why that
+        // matters. Set unconditionally past this point: even a plain
+        // (non-andFire) GoTo has now moved the playhead and must not have
+        // that overwritten by the generic post-fire advance.
+        goToRepositionedPlayhead = true
+        guard andFire, !isPanicking, let resolved = resolveGOTarget(raw) else { return }
+        fire(resolved)
+        advancePlayheadPastChain(from: resolved)
     }
 
     /// Enter-and-play-first group headers resolve to their first child.
@@ -288,7 +358,11 @@ public final class TransportController {
             childrenOf: { [weak self] id in self?.show().children(of: id) ?? [] },
             warn: { [weak self] message in self?.onOperatorWarning?(message) },
             oscSend: oscSend,
-            midiSend: midiSend
+            midiSend: midiSend,
+            goTo: { [weak self] callerID, callerNumber, targetID, andFire in
+                self?.performGoTo(callerID: callerID, callerNumber: callerNumber, target: targetID, andFire: andFire)
+            },
+            httpRequest: httpRequest
         )
         let instance = CueInstance(cue: cue, environment: environment)
         instance.onChildSpawned = { [weak self] child in

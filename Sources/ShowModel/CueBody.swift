@@ -14,6 +14,8 @@ public enum CueBody: Hashable, Sendable {
     case stop(StopBody)
     case oscSend(OSCSendBody)
     case midiSend(MIDISendBody)
+    case goTo(GoToBody)
+    case httpRequest(HTTPRequestBody)
     case group(GroupBody)
     case broken(BrokenBody)
 
@@ -37,6 +39,8 @@ public enum CueBody: Hashable, Sendable {
         case .stop: return "Stop"
         case .oscSend(let body): return body.address != "/" ? body.address : "OSC Send"
         case .midiSend(let body): return body.defaultName
+        case .goTo: return "Go To"
+        case .httpRequest(let body): return body.defaultName
         case .group(let body): return body.mode == .timeline ? "Timeline Group" : "Group"
         case .broken(let body): return "Unknown cue (\(body.originalType))"
         }
@@ -54,6 +58,8 @@ public enum CueBody: Hashable, Sendable {
         case .stop: return "Stop"
         case .oscSend: return "OSC Send"
         case .midiSend: return "MIDI Send"
+        case .goTo: return "Go To"
+        case .httpRequest: return "HTTP Request"
         case .group: return "Group"
         case .broken: return "Broken"
         }
@@ -77,7 +83,7 @@ public enum CueBody: Hashable, Sendable {
         case .image(let body): return body.outputGroupID
         case .text(let body): return body.outputGroupID
         case .slide(let body): return body.outputGroupID
-        case .audio, .fade, .stop, .oscSend, .midiSend, .group, .broken: return nil
+        case .audio, .fade, .stop, .oscSend, .midiSend, .goTo, .httpRequest, .group, .broken: return nil
         }
     }
 }
@@ -88,7 +94,7 @@ extension CueBody: Codable {
     }
 
     private enum Kind: String, Codable {
-        case audio, video, camera, image, text, slide, fade, stop, oscSend, midiSend, group
+        case audio, video, camera, image, text, slide, fade, stop, oscSend, midiSend, goTo, httpRequest, group
     }
 
     public init(from decoder: Decoder) throws {
@@ -105,6 +111,8 @@ extension CueBody: Codable {
         case .stop: self = .stop(try StopBody(from: decoder))
         case .oscSend: self = .oscSend(try OSCSendBody(from: decoder))
         case .midiSend: self = .midiSend(try MIDISendBody(from: decoder))
+        case .goTo: self = .goTo(try GoToBody(from: decoder))
+        case .httpRequest: self = .httpRequest(try HTTPRequestBody(from: decoder))
         case .group: self = .group(try GroupBody(from: decoder))
         case nil: self = .broken(BrokenBody(originalType: rawType))
         }
@@ -142,6 +150,12 @@ extension CueBody: Codable {
             try body.encode(to: encoder)
         case .midiSend(let body):
             try container.encode(Kind.midiSend, forKey: .type)
+            try body.encode(to: encoder)
+        case .goTo(let body):
+            try container.encode(Kind.goTo, forKey: .type)
+            try body.encode(to: encoder)
+        case .httpRequest(let body):
+            try container.encode(Kind.httpRequest, forKey: .type)
             try body.encode(to: encoder)
         case .group(let body):
             try container.encode(Kind.group, forKey: .type)
@@ -1008,6 +1022,104 @@ public struct MIDISendBody: Codable, Hashable, Sendable {
         case .controlChange: return "CC \(number) ch \(channel + 1)"
         case .programChange: return "Prog \(number) ch \(channel + 1)"
         }
+    }
+}
+
+/// D31: moves the playhead to `targetID`, optionally firing it — the
+/// show-control equivalent of clicking a different cue in the list then
+/// (optionally) pressing GO. Completes instantly like a stop cue (see
+/// `ShowRuntime.CueInstance.runGoToAction`). ALL target resolution (nil/
+/// self/deleted) and the actual playhead/fire/advance work live in
+/// `ShowRuntime.TransportController.performGoTo` — the only place with
+/// `setPlayhead`/`fire(cueID:)`/`advancePlayheadPastChain`. This cue's OWN
+/// auto-continue/auto-follow still anchors to ITS OWN list position
+/// (`nextCue(after:)` on the GoTo cue itself), never the jump target —
+/// that's `nextCue`'s existing behavior, pinned as intended here, not
+/// changed.
+public struct GoToBody: Codable, Hashable, Sendable {
+    /// nil = unset (warned no-op at fire) — never "loop back to the top".
+    public var targetID: UUID?
+    /// Off: just stands the target cue by. On: fires it immediately (like
+    /// pressing GO there) and advances the playhead past its follow chain.
+    public var andFire: Bool
+
+    public init(targetID: UUID? = nil, andFire: Bool = false) {
+        self.targetID = targetID
+        self.andFire = andFire
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case targetID, andFire
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        targetID = try c.decodeIfPresent(UUID.self, forKey: .targetID)
+        andFire = try c.decodeIfPresent(Bool.self, forKey: .andFire) ?? false
+    }
+}
+
+/// D31: the second outbound cue type (after D29's OSC Send). GO fires
+/// exactly one HTTP request — the show never waits on the network, same
+/// fire-and-forget contract as OSC/MIDI send (see
+/// `ShowRuntime.CueInstance.runHTTPRequestAction`). Model-pure — ShowModel
+/// stays URLSession-free; the app builds the actual `URLRequest` at fire
+/// time (see the app-layer `HTTPRequestSender`).
+public struct HTTPRequestBody: Codable, Hashable, Sendable {
+    public enum Method: String, Codable, Hashable, Sendable {
+        case get, post
+    }
+
+    public var method: Method
+    /// "" = unconfigured (warned no-op at fire, mirroring OSC's empty host).
+    /// UI normalizes to a leading "http://" on commit when no scheme is
+    /// typed — plain http:// show-network gear is the norm, not a warning.
+    public var urlString: String
+    /// POST only; still round-tripped for GET, just unused there.
+    public var contentType: String
+    /// POST body text; unused for GET.
+    public var payload: String
+    /// Request timeout, clamped 1...30 s.
+    public var timeout: TimeInterval
+
+    public init(
+        method: Method = .get,
+        urlString: String = "",
+        contentType: String = "application/json",
+        payload: String = "",
+        timeout: TimeInterval = 5
+    ) {
+        self.method = method
+        self.urlString = urlString
+        self.contentType = contentType
+        self.payload = payload
+        self.timeout = HTTPRequestBody.clampedTimeout(timeout)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case method, urlString, contentType, payload, timeout
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        method = try c.decodeIfPresent(Method.self, forKey: .method) ?? .get
+        urlString = try c.decodeIfPresent(String.self, forKey: .urlString) ?? ""
+        contentType = try c.decodeIfPresent(String.self, forKey: .contentType) ?? "application/json"
+        payload = try c.decodeIfPresent(String.self, forKey: .payload) ?? ""
+        timeout = HTTPRequestBody.clampedTimeout(try c.decodeIfPresent(TimeInterval.self, forKey: .timeout) ?? 5)
+    }
+
+    /// The host part of the URL when it parses, else a generic label —
+    /// mirrors OSCSendBody's "address, else generic label" defaultName.
+    public var defaultName: String {
+        if let url = URL(string: urlString), let host = url.host, !host.isEmpty {
+            return host
+        }
+        return "HTTP Request"
+    }
+
+    private static func clampedTimeout(_ raw: TimeInterval) -> TimeInterval {
+        min(max(raw, 1), 30)
     }
 }
 

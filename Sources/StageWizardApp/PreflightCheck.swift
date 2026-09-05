@@ -128,6 +128,56 @@ enum Preflight {
                     severity: .warning
                 ))
             }
+
+            // 10. D31: GoTo cues must resolve to a real, DISTINCT target when
+            // armed — a nil target does nothing, a deleted target does
+            // nothing, and a self-target is refused at runtime (the
+            // infinite-GO-loop guard) — all three are errors, not warnings,
+            // since the cue is otherwise entirely inert.
+            if case .goTo(let goTo) = cue.body {
+                if let target = goTo.targetID {
+                    if target == cue.id {
+                        issues.append(PreflightIssue(
+                            cueNumber: cue.number,
+                            message: "Cue \(cue.number): Go To cue targets itself",
+                            severity: .error
+                        ))
+                    } else if show.cue(withID: target) == nil {
+                        issues.append(PreflightIssue(
+                            cueNumber: cue.number,
+                            message: "Cue \(cue.number): Go To target no longer exists",
+                            severity: .error
+                        ))
+                    }
+                } else {
+                    issues.append(PreflightIssue(
+                        cueNumber: cue.number,
+                        message: "Cue \(cue.number): Go To cue has no target assigned",
+                        severity: .error
+                    ))
+                }
+            }
+
+            // 11. D31: HTTP Request cues need a URL to do anything (armed
+            // error), and a non-empty URL that still fails URL(string:) is
+            // also an error since the sender can't build a request at all.
+            // Plain http:// is deliberately NOT flagged — it's the norm for
+            // show-network gear (see project.yml's ATS exemption).
+            if case .httpRequest(let http) = cue.body {
+                if http.urlString.isEmpty {
+                    issues.append(PreflightIssue(
+                        cueNumber: cue.number,
+                        message: "Cue \(cue.number): HTTP cue has no URL set",
+                        severity: .error
+                    ))
+                } else if URL(string: http.urlString) == nil {
+                    issues.append(PreflightIssue(
+                        cueNumber: cue.number,
+                        message: "Cue \(cue.number): HTTP URL “\(http.urlString)” is not valid",
+                        severity: .error
+                    ))
+                }
+            }
         }
 
         // 4. Camera permission — show-wide, mirrors

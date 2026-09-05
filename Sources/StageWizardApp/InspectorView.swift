@@ -27,7 +27,7 @@ struct InspectorView: View {
             case .camera: return [.basics, .timeAndLevels, .geometry, .output, .effects, .triggers]
             case .video, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .text: return [.basics, .text, .timeAndLevels, .geometry, .output, .triggers]
-            case .fade, .stop, .oscSend, .midiSend: return [.basics, .timeAndLevels, .triggers]
+            case .fade, .stop, .oscSend, .midiSend, .goTo, .httpRequest: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
         }
@@ -406,6 +406,10 @@ private struct TimeAndLevelsTab: View {
             OSCSendForm(cueID: cueID)
         case .midiSend:
             MIDISendForm(cueID: cueID)
+        case .goTo:
+            GoToForm(cueID: cueID)
+        case .httpRequest:
+            HTTPRequestForm(cueID: cueID)
         case .group:
             GroupTimelineTab(cueID: cueID)   // not reachable via tabs; safe fallback
         case .broken:
@@ -1429,18 +1433,147 @@ private struct MIDISendForm: View {
     }
 }
 
-/// Picks another cue in the show as a fade/stop target.
+/// D31: GoTo cue — moves the playhead to another cue, optionally firing it.
+/// See `ShowRuntime.TransportController.performGoTo` for the actual
+/// playhead/fire/advance mechanics; ALL of it lives there, not here.
+private struct GoToForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .goTo(let goTo) = cue.body {
+            Form {
+                CueTargetPicker(label: "Target", target: Binding(
+                    get: { goTo.targetID },
+                    set: { v in update { $0.targetID = v } }
+                ), excluding: cueID, includeAllCueTypes: true)
+                Toggle("Fire target", isOn: Binding(
+                    get: { goTo.andFire },
+                    set: { v in update { $0.andFire = v } }
+                ))
+                Text("Off: just stands the target by. On: fires it immediately, like pressing GO there.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                if goTo.targetID == nil {
+                    Label("No target — this cue won't move the playhead.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                } else if goTo.targetID == cueID {
+                    Label("Target is this cue — refused at fire time (would loop forever).", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout GoToBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .goTo(var b) = cue.body {
+                change(&b)
+                cue.body = .goTo(b)
+            }
+        }
+    }
+}
+
+/// D31: HTTP Request cue — the second outbound cue type after D29's OSC
+/// Send. GO fires exactly one request when the cue fires; see
+/// `ShowRuntime.CueInstance.runHTTPRequestAction` and `HTTPRequestSender`.
+private struct HTTPRequestForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .httpRequest(let http) = cue.body {
+            Form {
+                Picker("Method", selection: Binding(
+                    get: { http.method },
+                    set: { v in update { $0.method = v } }
+                )) {
+                    Text("GET").tag(HTTPRequestBody.Method.get)
+                    Text("POST").tag(HTTPRequestBody.Method.post)
+                }
+
+                TextField("URL", text: Binding(
+                    get: { http.urlString },
+                    set: { v in update { $0.urlString = v } }
+                ), prompt: Text("http://host/path"))
+                .onSubmit {
+                    update { body in
+                        guard !body.urlString.isEmpty, URL(string: body.urlString)?.scheme == nil else { return }
+                        body.urlString = "http://" + body.urlString
+                    }
+                }
+                if http.urlString.isEmpty {
+                    Label("No URL — this cue won't send anything.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+
+                if http.method == .post {
+                    TextField("Content-Type", text: Binding(
+                        get: { http.contentType },
+                        set: { v in update { $0.contentType = v } }
+                    ))
+                    TextEditor(text: Binding(
+                        get: { http.payload },
+                        set: { v in update { $0.payload = v } }
+                    ))
+                    .frame(minHeight: 80)
+                    .font(.system(.body, design: .monospaced))
+                }
+
+                TextField(
+                    "Timeout (s)",
+                    value: Binding(
+                        get: { http.timeout },
+                        set: { v in update { $0.timeout = min(max(v, 1), 30) } }
+                    ),
+                    format: .number
+                )
+                .frame(width: 90)
+
+                Text("Fires one request when the cue fires — the show never waits on the network.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout HTTPRequestBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .httpRequest(var b) = cue.body {
+                change(&b)
+                cue.body = .httpRequest(b)
+            }
+        }
+    }
+}
+
+/// Picks another cue in the show as a fade/stop/goTo target.
 struct CueTargetPicker: View {
     @Environment(ShowDocumentController.self) private var document
     let label: String
     @Binding var target: UUID?
     let excluding: UUID
     var allowAll = false
+    /// D31: GoTo's target is a PLAYHEAD POSITION, not something to fade or
+    /// stop — it can be any other cue at all (including action cues like
+    /// Fade/Stop/OSC/MIDI/another GoTo), unlike fade/stop's default filter
+    /// to `isMediaOrGroup`.
+    var includeAllCueTypes = false
 
     var body: some View {
         Picker(label, selection: $target) {
             Text(allowAll ? "All playing cues" : "None").tag(nil as UUID?)
-            ForEach(document.show.cues.filter { $0.id != excluding && $0.body.isMediaOrGroup }) { cue in
+            ForEach(document.show.cues.filter {
+                $0.id != excluding && (includeAllCueTypes || $0.body.isMediaOrGroup)
+            }) { cue in
                 Text("\(cue.number)  \(cue.displayName)").tag(cue.id as UUID?)
             }
         }
@@ -1452,7 +1585,7 @@ extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
         case .audio, .video, .camera, .image, .text, .slide, .group: return true
-        case .fade, .stop, .oscSend, .midiSend, .broken: return false
+        case .fade, .stop, .oscSend, .midiSend, .goTo, .httpRequest, .broken: return false
         }
     }
 }

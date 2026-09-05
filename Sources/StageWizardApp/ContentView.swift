@@ -77,6 +77,8 @@ struct ContentView: View {
                 Button("Stop Cue") { CueFactory.addControlCue(.stop(StopBody()), to: document) }
                 Button("OSC Cue") { CueFactory.addControlCue(.oscSend(OSCSendBody()), to: document) }
                 Button("MIDI Cue") { CueFactory.addControlCue(.midiSend(MIDISendBody()), to: document) }
+                Button("Go To Cue") { CueFactory.addControlCue(.goTo(GoToBody()), to: document) }
+                Button("HTTP Cue") { CueFactory.addControlCue(.httpRequest(HTTPRequestBody()), to: document) }
                 Button("Group") { CueFactory.addControlCue(.group(GroupBody()), to: document) }
             } label: {
                 Label("Add Cue", systemImage: "plus")

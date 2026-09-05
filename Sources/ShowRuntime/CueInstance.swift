@@ -92,6 +92,22 @@ public final class CueInstance: Identifiable {
         /// one place that resolves destinations and warns on a name match
         /// failure.
         let midiSend: (MIDISendBody) -> Void
+        /// D31: GoTo cue action. ALL target resolution (nil/self/deleted)
+        /// and the actual playhead/fire/advance work live in
+        /// TransportController, the only place with setPlayhead/
+        /// fire(cueID:)/advancePlayheadPastChain — this closure is handed
+        /// the firing cue's own id (self-target guard) and number (for the
+        /// operator warning) alongside the raw target/andFire from the
+        /// body. See `runGoToAction` and `TransportController.performGoTo`.
+        let goTo: (_ callerID: UUID, _ callerNumber: String, _ targetID: UUID?, _ andFire: Bool) -> Void
+        /// D31: fire-and-forget HTTP request for `.httpRequest` cues — the
+        /// second outbound cue type (after D29's OSC Send), injected the
+        /// same way. Never invoked with an empty urlString —
+        /// `runHTTPRequestAction` warns and no-ops instead, mirroring
+        /// oscSend's empty-host guard. A non-empty but unparseable URL is
+        /// NOT caught here — that's the app-layer `HTTPRequestSender`'s job
+        /// (building the actual URLRequest is where "unparseable" shows up).
+        let httpRequest: (HTTPRequestBody) -> Void
     }
 
     init(cue: Cue, environment: RuntimeEnvironment, preArmedPlayer: MediaPlayback? = nil) {
@@ -169,6 +185,14 @@ public final class CueInstance: Identifiable {
             finish(.completed)
         case .midiSend(let body):
             runMIDISendAction(body)
+            completeAction()
+            finish(.completed)
+        case .goTo(let body):
+            runGoToAction(body)
+            completeAction()
+            finish(.completed)
+        case .httpRequest(let body):
+            runHTTPRequestAction(body)
             completeAction()
             finish(.completed)
         case .group(let body):
@@ -334,6 +358,41 @@ public final class CueInstance: Identifiable {
     /// app-layer `MIDIController.send`.
     private func runMIDISendAction(_ body: MIDISendBody) {
         environment.midiSend(body)
+    }
+
+    // MARK: - GoTo action (D31)
+
+    /// Moves the playhead to `body.targetID`, optionally firing it —
+    /// completes instantly like a stop cue. This cue's OWN auto-continue/
+    /// auto-follow still anchors to ITS OWN list position (`nextCue(after:)`
+    /// on THIS GoTo cue, scheduled in `TransportController.fire(_:)` before
+    /// `begin()` ever runs this action) — NOT the jump target. That's
+    /// `nextCue`'s existing behavior and is pinned here as intended, not
+    /// changed by this cue type.
+    ///
+    /// All target resolution (nil/self/deleted) and the actual playhead/
+    /// fire/advance machinery live in TransportController — the only place
+    /// with setPlayhead/fire(cueID:)/advancePlayheadPastChain — so this arm
+    /// just forwards the raw target + andFire flag plus this cue's own
+    /// identity (for the self-target guard and the operator warning).
+    private func runGoToAction(_ body: GoToBody) {
+        environment.goTo(cue.id, cue.number, body.targetID, body.andFire)
+    }
+
+    // MARK: - HTTP request action (D31)
+
+    /// Fires one HTTP request, fire-and-forget — completes instantly like
+    /// oscSend/midiSend; GO never waits on the network. An empty urlString
+    /// is unconfigured — a warned no-op, exactly like OSC's empty host. A
+    /// non-empty but unparseable URL is NOT caught here — the app-layer
+    /// `HTTPRequestSender` is where "can't build a URLRequest" is detected
+    /// and warned.
+    private func runHTTPRequestAction(_ body: HTTPRequestBody) {
+        guard !body.urlString.isEmpty else {
+            environment.warn("HTTP \(cue.number): no URL configured — skipped")
+            return
+        }
+        environment.httpRequest(body)
     }
 
     private func resolveTargets(_ targetID: UUID?) -> [CueInstance] {

@@ -15,6 +15,9 @@ final class AppModel {
     /// counterpart to `oscServer` (which only ever listens/replies). Created
     /// (like `document`) before `transport`, whose init closure captures it.
     let oscSender: OSCSender
+    /// D31: fire-and-forget HTTP sender for `.httpRequest` cues — the second
+    /// outbound cue type. Created before `transport`, same as `oscSender`.
+    let httpRequestSender: HTTPRequestSender
     /// Single funnel every remote-control surface routes through.
     let triggerRouter = TriggerRouter()
     /// CoreMIDI listener — MIDI is TriggerRouter's first client.
@@ -166,12 +169,15 @@ final class AppModel {
         provider.settings = { document.show.settings }
         let oscSender = OSCSender()
         self.oscSender = oscSender
+        let httpRequestSender = HTTPRequestSender()
+        self.httpRequestSender = httpRequestSender
         self.transport = TransportController(
             provider: provider,
             show: { document.show },
             showFolder: { document.showFolder },
             oscSend: { body in oscSender.send(body) },
-            midiSend: { [midiController] body in midiController.send(body) }
+            midiSend: { [midiController] body in midiController.send(body) },
+            httpRequest: { body in httpRequestSender.send(body) }
         )
         self.shortcuts = ShortcutManager()
         wire()
@@ -191,6 +197,9 @@ final class AppModel {
             self?.pushWarning(message)
         }
         midiController.onWarning = { [weak self] message in
+            self?.pushWarning(message)
+        }
+        httpRequestSender.onWarning = { [weak self] message in
             self?.pushWarning(message)
         }
         document.onRecentsChanged = { [weak self] in

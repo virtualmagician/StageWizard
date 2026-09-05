@@ -401,6 +401,108 @@ final class PreflightTests: XCTestCase {
         XCTAssertEqual(issues.first?.severity, .warning)
     }
 
+    // MARK: - D31: GoTo cues
+
+    func testArmedGoToCueWithNilTargetIsError() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .goTo(GoToBody(targetID: nil)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no target assigned") ?? false)
+    }
+
+    func testArmedGoToCueWithDeletedTargetIsError() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .goTo(GoToBody(targetID: UUID())))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no longer exists") ?? false)
+    }
+
+    func testArmedGoToCueTargetingItselfIsError() {
+        var show = ShowFile()
+        let id = UUID()
+        show.cues = [Cue(id: id, number: "1", body: .goTo(GoToBody(targetID: id)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("targets itself") ?? false)
+    }
+
+    func testArmedGoToCueWithValidDistinctTargetHasNoIssue() {
+        var show = ShowFile()
+        let target = Cue(number: "2", body: .stop(StopBody()))
+        show.cues = [Cue(number: "1", body: .goTo(GoToBody(targetID: target.id))), target]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "a configured GoTo cue should be clean: \(issues)")
+    }
+
+    func testDisarmedGoToCueWithNilTargetSkipsCheckEntirely() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", armed: false, body: .goTo(GoToBody(targetID: nil)))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "disarmed cues skip the GoTo check entirely, like output/device checks: \(issues)")
+    }
+
+    // MARK: - D31: HTTP Request cues
+
+    func testArmedHTTPCueWithEmptyURLIsError() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .httpRequest(HTTPRequestBody(urlString: "")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no URL set") ?? false)
+    }
+
+    func testArmedHTTPCueWithURLThatFailsToParseIsError() {
+        var show = ShowFile()
+        // An unterminated IPv6-literal bracket is rejected outright by
+        // URL(string:) on this Foundation (unlike plain unescaped spaces,
+        // which it percent-encodes rather than refusing).
+        show.cues = [Cue(number: "1", body: .httpRequest(HTTPRequestBody(urlString: "http://[invalid")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("not valid") ?? false)
+    }
+
+    func testArmedHTTPCueWithPlainHTTPURLHasNoWarning() {
+        // Plain http:// is the NORM for show-network gear — never flagged,
+        // not even as a warning (see project.yml's ATS exemption).
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .httpRequest(HTTPRequestBody(urlString: "http://10.0.0.5/relay/on")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "plain http:// must never be flagged: \(issues)")
+    }
+
+    func testDisarmedHTTPCueWithEmptyURLSkipsCheckEntirely() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", armed: false, body: .httpRequest(HTTPRequestBody(urlString: "")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "disarmed cues skip the HTTP check entirely, like output/device checks: \(issues)")
+    }
+
     func testStageDisplayCollisionWarningDefaultsToFalseWhenOmitted() {
         // Existing call sites (and every other test above) don't pass this
         // parameter at all — it must default to "no collision", not crash

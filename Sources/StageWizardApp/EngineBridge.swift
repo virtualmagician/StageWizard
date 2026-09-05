@@ -105,7 +105,7 @@ final class EnginePlayerProvider: CuePlayerProviding {
             )
             return try await TextCuePlayer.arm(body: body, targets: targets)
 
-        case .fade, .stop, .oscSend, .midiSend, .group, .broken:
+        case .fade, .stop, .oscSend, .midiSend, .goTo, .httpRequest, .group, .broken:
             throw ArmError.notAMediaCue
         }
     }

@@ -41,7 +41,7 @@ final class DurationCache {
             return body.duration
         case .stop(let body):
             return body.fadeOutTime
-        case .oscSend, .midiSend:
+        case .oscSend, .midiSend, .goTo, .httpRequest:
             // Instant, fire-and-forget — no duration to show.
             return 0
         case .camera, .image, .text, .slide, .broken:
