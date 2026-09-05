@@ -106,6 +106,8 @@ struct ShowCommands: Commands {
             Button("Add Stop Cue") { CueFactory.addControlCue(.stop(StopBody()), to: document) }
                 .keyboardShortcut("5", modifiers: [.command, .shift])
                 .disabled(app.isShowMode)
+            Button("Add OSC Cue") { CueFactory.addControlCue(.oscSend(OSCSendBody()), to: document) }
+                .disabled(app.isShowMode)
             Button("Add Group") { CueFactory.addControlCue(.group(GroupBody()), to: document) }
                 .keyboardShortcut("6", modifiers: [.command, .shift])
                 .disabled(app.isShowMode)

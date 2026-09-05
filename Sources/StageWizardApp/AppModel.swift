@@ -11,6 +11,10 @@ final class AppModel {
     let document: ShowDocumentController
     let transport: TransportController
     let shortcuts: ShortcutManager
+    /// D29: fire-and-forget UDP sender for `.oscSend` cues — the OUTBOUND
+    /// counterpart to `oscServer` (which only ever listens/replies). Created
+    /// (like `document`) before `transport`, whose init closure captures it.
+    let oscSender: OSCSender
     /// Single funnel every remote-control surface routes through.
     let triggerRouter = TriggerRouter()
     /// CoreMIDI listener — MIDI is TriggerRouter's first client.
@@ -159,10 +163,13 @@ final class AppModel {
         self.document = document
         let provider = EnginePlayerProvider()
         provider.settings = { document.show.settings }
+        let oscSender = OSCSender()
+        self.oscSender = oscSender
         self.transport = TransportController(
             provider: provider,
             show: { document.show },
-            showFolder: { document.showFolder }
+            showFolder: { document.showFolder },
+            oscSend: { body in oscSender.send(body) }
         )
         self.shortcuts = ShortcutManager()
         wire()
@@ -176,6 +183,9 @@ final class AppModel {
             self?.updateSleepPrevention(active)
         }
         transport.onOperatorWarning = { [weak self] message in
+            self?.pushWarning(message)
+        }
+        oscSender.onWarning = { [weak self] message in
             self?.pushWarning(message)
         }
         document.onRecentsChanged = { [weak self] in

@@ -299,6 +299,48 @@ final class PreflightTests: XCTestCase {
         XCTAssertTrue(issues.isEmpty, "\(issues)")
     }
 
+    // MARK: - D29: OSC Send cues
+
+    func testArmedOSCCueWithEmptyHostIsError() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .oscSend(OSCSendBody(host: "")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .error)
+        XCTAssertTrue(issues.first?.message.contains("no destination host") ?? false)
+    }
+
+    func testArmedOSCCueWithHostAndDefaultAddressHasNoIssue() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .oscSend(OSCSendBody(host: "127.0.0.1")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "a configured OSC cue should be clean: \(issues)")
+    }
+
+    func testOSCCueWithMalformedAddressIsWarning() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", body: .oscSend(OSCSendBody(host: "127.0.0.1", address: "go")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertEqual(issues.count, 1)
+        XCTAssertEqual(issues.first?.severity, .warning)
+        XCTAssertTrue(issues.first?.message.contains("doesn't start with") ?? false)
+    }
+
+    func testDisarmedOSCCueWithEmptyHostSkipsCheckEntirely() {
+        var show = ShowFile()
+        show.cues = [Cue(number: "1", armed: false, body: .oscSend(OSCSendBody(host: "")))]
+        let issues = Preflight.run(
+            show: show, showFolder: nil, cameraAuthorized: true, virtualCamFeeding: false, connectedDevices: []
+        )
+        XCTAssertTrue(issues.isEmpty, "disarmed cues skip the OSC checks entirely, like output/device checks: \(issues)")
+    }
+
     func testStageDisplayCollisionWarningDefaultsToFalseWhenOmitted() {
         // Existing call sites (and every other test above) don't pass this
         // parameter at all — it must default to "no collision", not crash

@@ -27,7 +27,7 @@ struct InspectorView: View {
             case .camera: return [.basics, .timeAndLevels, .geometry, .output, .effects, .triggers]
             case .video, .image, .slide: return [.basics, .timeAndLevels, .geometry, .output, .triggers]
             case .text: return [.basics, .text, .timeAndLevels, .geometry, .output, .triggers]
-            case .fade, .stop: return [.basics, .timeAndLevels, .triggers]
+            case .fade, .stop, .oscSend: return [.basics, .timeAndLevels, .triggers]
             case .broken: return [.basics]
             }
         }
@@ -402,6 +402,8 @@ private struct TimeAndLevelsTab: View {
             FadeForm(cueID: cueID)
         case .stop:
             StopForm(cueID: cueID)
+        case .oscSend:
+            OSCSendForm(cueID: cueID)
         case .group:
             GroupTimelineTab(cueID: cueID)   // not reachable via tabs; safe fallback
         case .broken:
@@ -1106,6 +1108,197 @@ private struct StopForm: View {
     }
 }
 
+/// D29: OSC Send cue — the first outbound cue type. Host/port/address plus a
+/// compact argument-row editor. GO fires exactly one message at fire time;
+/// see `ShowRuntime.CueInstance.runOSCSendAction`.
+private struct OSCSendForm: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .oscSend(let osc) = cue.body {
+            Form {
+                TextField("Host", text: Binding(
+                    get: { osc.host },
+                    set: { v in update { $0.host = v } }
+                ), prompt: Text("hostname or IP"))
+                TextField(
+                    "Port",
+                    value: Binding(
+                        get: { Int(osc.port) },
+                        set: { v in update { $0.port = Self.clampedPort(v) } }
+                    ),
+                    format: .number.grouping(.never)
+                )
+                .frame(width: 90)
+                TextField("Address", text: Binding(
+                    get: { osc.address },
+                    set: { v in update { $0.address = v } }
+                ), prompt: Text("/"))
+                .onSubmit {
+                    update { body in
+                        guard !body.address.hasPrefix("/") else { return }
+                        body.address = body.address.isEmpty ? "/" : "/" + body.address
+                    }
+                }
+                if osc.host.isEmpty {
+                    Label("No destination host — this cue won't send anything.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+                Divider()
+                OSCArgumentsEditor(cueID: cueID)
+                Text("Sends one OSC message when the cue fires. Fire-and-forget — the show never waits on the network.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .formStyle(.columns)
+            .padding(12)
+        }
+    }
+
+    private func update(_ change: (inout OSCSendBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .oscSend(var b) = cue.body {
+                change(&b)
+                cue.body = .oscSend(b)
+            }
+        }
+    }
+
+    private static func clampedPort(_ raw: Int) -> UInt16 {
+        UInt16(min(max(raw, 1), 65535))
+    }
+}
+
+/// Argument row type as authored: Int32, Float, or String.
+private enum OSCArgumentKind: String, CaseIterable, Hashable {
+    case int32 = "Int"
+    case float = "Float"
+    case string = "String"
+
+    init(_ argument: OSCSendArgument) {
+        switch argument {
+        case .int32: self = .int32
+        case .float: self = .float
+        case .string: self = .string
+        }
+    }
+
+    /// Best-effort value carryover when the operator switches an argument's
+    /// type in the picker — reparses the CURRENT text instead of resetting to
+    /// a zero/empty default, so "3" typed as a string becomes int32(3) when
+    /// switched to Int rather than silently zeroing.
+    func converted(from argument: OSCSendArgument) -> OSCSendArgument {
+        oscArgumentParsed(oscArgumentText(argument), as: self)
+    }
+}
+
+private func oscArgumentText(_ argument: OSCSendArgument) -> String {
+    switch argument {
+    case .int32(let value): return String(value)
+    case .float(let value): return String(value)
+    case .string(let value): return value
+    }
+}
+
+private func oscArgumentParsed(_ text: String, as kind: OSCArgumentKind) -> OSCSendArgument {
+    switch kind {
+    case .int32: return .int32(Int32(text) ?? 0)
+    case .float: return .float(Double(text) ?? 0)
+    case .string: return .string(text)
+    }
+}
+
+/// Compact list of OSC argument rows: type picker + value field, with add/
+/// remove buttons. No stable per-argument id in the model (the wire format
+/// has none either) — index-based `ForEach` is fine here since edits always
+/// go through one synchronous `document.updateCue` funnel, never concurrent
+/// reordering from elsewhere.
+private struct OSCArgumentsEditor: View {
+    @Environment(ShowDocumentController.self) private var document
+    let cueID: UUID
+
+    var body: some View {
+        if let cue = document.cue(withID: cueID), case .oscSend(let osc) = cue.body {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Arguments")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        update { $0.arguments.append(.string("")) }
+                    } label: {
+                        Image(systemName: "plus.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add argument")
+                }
+                ForEach(osc.arguments.indices, id: \.self) { index in
+                    argumentRow(osc.arguments[index], at: index)
+                }
+                if osc.arguments.isEmpty {
+                    Text("No arguments — sends a bare address.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func argumentRow(_ argument: OSCSendArgument, at index: Int) -> some View {
+        HStack(spacing: 8) {
+            Picker("", selection: Binding(
+                get: { OSCArgumentKind(argument) },
+                set: { newKind in
+                    update { body in
+                        guard body.arguments.indices.contains(index) else { return }
+                        body.arguments[index] = newKind.converted(from: body.arguments[index])
+                    }
+                }
+            )) {
+                ForEach(OSCArgumentKind.allCases, id: \.self) { kind in
+                    Text(kind.rawValue).tag(kind)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 90)
+
+            TextField("Value", text: Binding(
+                get: { oscArgumentText(argument) },
+                set: { newValue in
+                    update { body in
+                        guard body.arguments.indices.contains(index) else { return }
+                        body.arguments[index] = oscArgumentParsed(newValue, as: OSCArgumentKind(argument))
+                    }
+                }
+            ))
+
+            Button {
+                update { body in
+                    guard body.arguments.indices.contains(index) else { return }
+                    body.arguments.remove(at: index)
+                }
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.plain)
+            .help("Remove argument")
+        }
+    }
+
+    private func update(_ change: (inout OSCSendBody) -> Void) {
+        document.updateCue(cueID) { cue in
+            if case .oscSend(var b) = cue.body {
+                change(&b)
+                cue.body = .oscSend(b)
+            }
+        }
+    }
+}
+
 /// Picks another cue in the show as a fade/stop target.
 struct CueTargetPicker: View {
     @Environment(ShowDocumentController.self) private var document
@@ -1129,7 +1322,7 @@ extension CueBody {
     var isMediaOrGroup: Bool {
         switch self {
         case .audio, .video, .camera, .image, .text, .slide, .group: return true
-        case .fade, .stop, .broken: return false
+        case .fade, .stop, .oscSend, .broken: return false
         }
     }
 }

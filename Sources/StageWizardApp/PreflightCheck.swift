@@ -93,6 +93,27 @@ enum Preflight {
                     severity: .warning
                 ))
             }
+
+            // 8. D29: OSC Send cues need a destination host to do anything,
+            // and a well-formed address (a missing leading "/" still sends,
+            // per OSC 1.0, but is almost certainly a typo) — the second is a
+            // warning only, since it doesn't actually stop the cue from firing.
+            if case .oscSend(let osc) = cue.body {
+                if osc.host.isEmpty {
+                    issues.append(PreflightIssue(
+                        cueNumber: cue.number,
+                        message: "Cue \(cue.number): OSC cue has no destination host",
+                        severity: .error
+                    ))
+                }
+                if !osc.address.hasPrefix("/") {
+                    issues.append(PreflightIssue(
+                        cueNumber: cue.number,
+                        message: "Cue \(cue.number): OSC address “\(osc.address)” doesn't start with “/”",
+                        severity: .warning
+                    ))
+                }
+            }
         }
 
         // 4. Camera permission — show-wide, mirrors

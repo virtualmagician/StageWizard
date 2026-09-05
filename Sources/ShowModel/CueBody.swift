@@ -12,6 +12,7 @@ public enum CueBody: Hashable, Sendable {
     case slide(SlideBody)
     case fade(FadeBody)
     case stop(StopBody)
+    case oscSend(OSCSendBody)
     case group(GroupBody)
     case broken(BrokenBody)
 
@@ -33,6 +34,7 @@ public enum CueBody: Hashable, Sendable {
             return body.media.fileName
         case .fade: return "Fade"
         case .stop: return "Stop"
+        case .oscSend(let body): return body.address != "/" ? body.address : "OSC Send"
         case .group(let body): return body.mode == .timeline ? "Timeline Group" : "Group"
         case .broken(let body): return "Unknown cue (\(body.originalType))"
         }
@@ -48,6 +50,7 @@ public enum CueBody: Hashable, Sendable {
         case .slide: return "Slide"
         case .fade: return "Fade"
         case .stop: return "Stop"
+        case .oscSend: return "OSC Send"
         case .group: return "Group"
         case .broken: return "Broken"
         }
@@ -71,7 +74,7 @@ public enum CueBody: Hashable, Sendable {
         case .image(let body): return body.outputGroupID
         case .text(let body): return body.outputGroupID
         case .slide(let body): return body.outputGroupID
-        case .audio, .fade, .stop, .group, .broken: return nil
+        case .audio, .fade, .stop, .oscSend, .group, .broken: return nil
         }
     }
 }
@@ -82,7 +85,7 @@ extension CueBody: Codable {
     }
 
     private enum Kind: String, Codable {
-        case audio, video, camera, image, text, slide, fade, stop, group
+        case audio, video, camera, image, text, slide, fade, stop, oscSend, group
     }
 
     public init(from decoder: Decoder) throws {
@@ -97,6 +100,7 @@ extension CueBody: Codable {
         case .slide: self = .slide(try SlideBody(from: decoder))
         case .fade: self = .fade(try FadeBody(from: decoder))
         case .stop: self = .stop(try StopBody(from: decoder))
+        case .oscSend: self = .oscSend(try OSCSendBody(from: decoder))
         case .group: self = .group(try GroupBody(from: decoder))
         case nil: self = .broken(BrokenBody(originalType: rawType))
         }
@@ -128,6 +132,9 @@ extension CueBody: Codable {
             try body.encode(to: encoder)
         case .stop(let body):
             try container.encode(Kind.stop, forKey: .type)
+            try body.encode(to: encoder)
+        case .oscSend(let body):
+            try container.encode(Kind.oscSend, forKey: .type)
             try body.encode(to: encoder)
         case .group(let body):
             try container.encode(Kind.group, forKey: .type)
@@ -827,6 +834,96 @@ public struct StopBody: Codable, Hashable, Sendable {
         self.targetID = targetID
         self.fadeOutTime = fadeOutTime
         self.curve = curve
+    }
+}
+
+/// D29: one typed OSC 1.0 argument, as authored on an `OSCSendBody`.
+/// Model-pure — ShowModel stays AppKit/Network-free, so this is NOT the same
+/// type as the app layer's wire-level `OSCArgument`; the app converts one to
+/// the other at fire time (int32→.int32, float→.float32(Float), string→.string).
+public enum OSCSendArgument: Hashable, Sendable {
+    case int32(Int32)
+    case float(Double)
+    case string(String)
+}
+
+extension OSCSendArgument: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, value
+    }
+
+    private enum Kind: String, Codable {
+        case int32, float, string
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .type) {
+        case .int32:
+            self = .int32(try container.decode(Int32.self, forKey: .value))
+        case .float:
+            self = .float(try container.decode(Double.self, forKey: .value))
+        case .string:
+            self = .string(try container.decode(String.self, forKey: .value))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .int32(let value):
+            try container.encode(Kind.int32, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case .float(let value):
+            try container.encode(Kind.float, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case .string(let value):
+            try container.encode(Kind.string, forKey: .type)
+            try container.encode(value, forKey: .value)
+        }
+    }
+}
+
+/// D29: the first OUTBOUND cue type. GO fires exactly one OSC 1.0 message at
+/// `host:port` — instant, fire-and-forget, same "never blocks GO" contract as
+/// Stop/Fade (see ShowRuntime.CueInstance.runOSCSendAction). `host` empty is
+/// "unconfigured" — a warned no-op, mirroring a fade cue with no target.
+public struct OSCSendBody: Codable, Hashable, Sendable {
+    /// Destination hostname or IP; "" = unconfigured (warned no-op at fire).
+    public var host: String
+    public var port: UInt16
+    /// OSC address pattern; UI normalizes to a leading "/" on commit.
+    public var address: String
+    public var arguments: [OSCSendArgument]
+
+    public init(
+        host: String = "",
+        port: UInt16 = 8000,
+        address: String = "/",
+        arguments: [OSCSendArgument] = []
+    ) {
+        self.host = host
+        self.port = OSCSendBody.clampedPort(port)
+        self.address = address
+        self.arguments = arguments
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case host, port, address, arguments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? ""
+        port = OSCSendBody.clampedPort(try c.decodeIfPresent(UInt16.self, forKey: .port) ?? 8000)
+        address = try c.decodeIfPresent(String.self, forKey: .address) ?? "/"
+        arguments = try c.decodeIfPresent([OSCSendArgument].self, forKey: .arguments) ?? []
+    }
+
+    /// UInt16 already excludes negative/overflow, but 0 is not a usable port —
+    /// falls back to the default like any other out-of-range authored/decoded value.
+    private static func clampedPort(_ raw: UInt16) -> UInt16 {
+        raw == 0 ? 8000 : raw
     }
 }
 

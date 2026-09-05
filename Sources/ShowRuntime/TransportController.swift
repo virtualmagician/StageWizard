@@ -49,6 +49,12 @@ public final class TransportController {
     private let provider: CuePlayerProviding
     private let show: () -> ShowFile
     private let showFolder: () -> URL?
+    /// D29: fire-and-forget OSC send for `.oscSend` cues — injected exactly
+    /// like `show`/`showFolder` so ShowRuntime never gains a Network
+    /// dependency. Defaults to a no-op so every existing call site (tests
+    /// included) keeps compiling unchanged; AppModel wires the real
+    /// UDP-sending closure (see `OSCSender`).
+    private let oscSend: (OSCSendBody) -> Void
 
     private var lastGoAt: ContinuousClock.Instant?
     private var lastPanicAt: ContinuousClock.Instant?
@@ -67,11 +73,13 @@ public final class TransportController {
     public init(
         provider: CuePlayerProviding,
         show: @escaping () -> ShowFile,
-        showFolder: @escaping () -> URL?
+        showFolder: @escaping () -> URL?,
+        oscSend: @escaping (OSCSendBody) -> Void = { _ in }
     ) {
         self.provider = provider
         self.show = show
         self.showFolder = showFolder
+        self.oscSend = oscSend
     }
 
     private var settings: ShowSettings { show().settings }
@@ -270,7 +278,8 @@ public final class TransportController {
             showFolder: showFolder,
             activeInstances: { [weak self] in self?.registry.instances ?? [] },
             childrenOf: { [weak self] id in self?.show().children(of: id) ?? [] },
-            warn: { [weak self] message in self?.onOperatorWarning?(message) }
+            warn: { [weak self] message in self?.onOperatorWarning?(message) },
+            oscSend: oscSend
         )
         let instance = CueInstance(cue: cue, environment: environment)
         instance.onChildSpawned = { [weak self] child in

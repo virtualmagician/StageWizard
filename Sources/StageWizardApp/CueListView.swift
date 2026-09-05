@@ -324,6 +324,11 @@ struct CueRowView: View {
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(.red)
                 .help("No video output assigned — pick one in the Output tab")
+        } else if isOSCUnconfigured(cue) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.red)
+                .help("No destination host set — set one in the inspector")
         } else if isActiveGroupRow(cue) {
             Image(systemName: "waveform")
                 .font(.system(size: 10))
@@ -481,6 +486,12 @@ struct CueRowView: View {
         return document.show.settings.group(withID: id) == nil
     }
 
+    /// D29: an OSC Send cue with no destination host configured yet.
+    private func isOSCUnconfigured(_ cue: Cue) -> Bool {
+        guard case .oscSend(let body) = cue.body else { return false }
+        return body.host.isEmpty
+    }
+
     private func isMediaBroken(_ cue: Cue) -> Bool {
         let media: MediaReference? = switch cue.body {
         case .audio(let body): body.media
@@ -529,6 +540,7 @@ func typeSymbol(_ body: CueBody) -> String {
     case .slide: return "photo"
     case .fade: return "dial.low"
     case .stop: return "stop.fill"
+    case .oscSend: return "dot.radiowaves.right"
     case .group: return "folder"
     case .broken: return "exclamationmark.triangle"
     }

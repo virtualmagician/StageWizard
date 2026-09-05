@@ -77,6 +77,12 @@ public final class CueInstance: Identifiable {
         /// Group children lookup (document order).
         let childrenOf: (UUID) -> [Cue]
         let warn: (String) -> Void
+        /// D29: fire-and-forget UDP send for `.oscSend` cues. Never invoked
+        /// with an empty host — `runOSCSendAction` warns and no-ops instead.
+        /// ShowRuntime stays Network-free: the real implementation is an
+        /// app-layer closure AppModel wires into TransportController.init,
+        /// mirroring the `show`/`showFolder` injection pattern.
+        let oscSend: (OSCSendBody) -> Void
     }
 
     init(cue: Cue, environment: RuntimeEnvironment, preArmedPlayer: MediaPlayback? = nil) {
@@ -146,6 +152,10 @@ public final class CueInstance: Identifiable {
             runFadeAction(body)
         case .stop(let body):
             runStopAction(body)
+            completeAction()
+            finish(.completed)
+        case .oscSend(let body):
+            runOSCSendAction(body)
             completeAction()
             finish(.completed)
         case .group(let body):
@@ -282,6 +292,21 @@ public final class CueInstance: Identifiable {
                 target.stop()
             }
         }
+    }
+
+    // MARK: - OSC send action (D29)
+
+    /// The first OUTBOUND cue type: fire one OSC message, fire-and-forget.
+    /// Instant like a stop cue — completes synchronously right here, before
+    /// the network round trip (if any) even starts; GO never waits on it.
+    /// An empty host is unconfigured — a warned no-op, exactly like a fade
+    /// cue with no target.
+    private func runOSCSendAction(_ body: OSCSendBody) {
+        guard !body.host.isEmpty else {
+            environment.warn("OSC \(cue.number): no destination host — skipped")
+            return
+        }
+        environment.oscSend(body)
     }
 
     private func resolveTargets(_ targetID: UUID?) -> [CueInstance] {

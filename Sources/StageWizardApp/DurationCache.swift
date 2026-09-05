@@ -41,6 +41,9 @@ final class DurationCache {
             return body.duration
         case .stop(let body):
             return body.fadeOutTime
+        case .oscSend:
+            // Instant, fire-and-forget — no duration to show.
+            return 0
         case .camera, .image, .text, .slide, .broken:
             return nil
         case .group(let body) where body.mode == .enterAndPlayFirst:
