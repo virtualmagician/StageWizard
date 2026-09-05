@@ -101,7 +101,10 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
   advertises itself over Bonjour (`_stagewizard._udp`) and pushes live
   status feedback (standing-by cue, running count, panic, window, notes,
   elapsed, full cue list, a liveness heartbeat) to any sender it's heard
-  from recently, so a hardware controller never has to poll — and a
+  from recently, so a hardware controller never has to poll (with a
+  **Bluetooth LE fallback tunnel** carrying the same OSC contract when
+  show Wi-Fi dies — the app auto-reconnects to advertising controllers
+  as a standing central) — and a
   **web remote** — the app serves a dark phone page (huge GO, prev/next,
   double-tap STOP ALL, standing-by cue + notes) at a QR code you scan
   from the settings panel. All zero-config,
@@ -203,7 +206,7 @@ AVFoundation, CoreMIDI, and Network.framework callback hops isolation
 immediately; the only off-main mutations are documented-thread-safe volume
 setters driven by the fade clock. Remote triggers (MIDI, OSC, web remote,
 gesture) all route through a single trigger bus into the same transport the
-keyboard uses. 500 unit and integration tests cover the model, sequencing
+keyboard uses. 686 unit and integration tests cover the model, sequencing
 semantics, the engines, the OSC/HTTP parsers, deck conversion, and
 full-stack playback.
 
