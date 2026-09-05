@@ -69,6 +69,16 @@ concurrency), SwiftUI + AppKit, AVFoundation. No third-party dependencies.
 - **Fade & stop cues** — target any running cue (or everything); resolved
   against live playback at fire time; fade to level or to silence with
   stop-when-done.
+- **Action cues** — StageWizard conducts the rest of the rig from the same
+  cue list: **OSC cues** send one OSC message to any host:port (typed
+  int/float/string arguments — fire a lighting console, a media server, a
+  drone rig in the same beat as your video); **MIDI cues** send a note, CC,
+  or program change to any MIDI destination (a note-off always follows,
+  even through panic — no hanging synths); **HTTP cues** fire a GET/POST at
+  any URL (PTZ presets, relay boxes, stream decks); **GoTo cues** jump the
+  playhead to any cue — optionally firing it — for repeatable sections,
+  encores, and preshow loops. All fire-and-forget: the show never waits on
+  the network.
 - **Panic** — Esc fades everything out over the show's panic duration; Esc
   twice hard-stops instantly. Hardwired, not reassignable.
 - **Workspace modes** — Edit / **Show** (locks every editing surface while

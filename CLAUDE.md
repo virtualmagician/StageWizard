@@ -157,6 +157,27 @@ swift Tools/make-test-media.swift TestMedia        # regenerate test media
   stays physical). Panic is not a ShortcutAction — remotes reach it via
   TriggerRouter.routePanic() → transport.panic(), same as Esc.
 - GO past the last cue goes dead — no wraparound.
+- D29-D31 action cues (.oscSend/.midiSend/.goTo/.httpRequest): instant
+  completion inside the fire path exactly like Stop/Fade (preWait honored,
+  never block GO, no format bump — new cue TYPES decode to .broken in old
+  apps by design). I/O is injected into TransportController as closures
+  (oscSend/midiSend/httpRequest — ShowRuntime gains no Network/CoreMIDI
+  deps); app-layer senders are fire-and-forget (OSCSender: one-shot
+  NWConnection, cancel only after contentProcessed; HTTPRequestSender:
+  ephemeral session, warns once on transport error/status>=400;
+  MIDIController output half: lazy client independent of the midiEnabled
+  LISTENER setting). Unconfigured = warned no-op (OSC empty host, HTTP
+  empty URL, GoTo nil/deleted/SELF target — self+andFire would be an
+  infinite GO loop); MIDI destinationName "" = ALL destinations (valid).
+  A noteOn ALWAYS gets its matching noteOff (noteOffAfter, controller-
+  owned Task that panic/stop deliberately never cancel — hanging note >
+  late noteOff). GoTo: setPlayhead(target) (+ optional andFire through
+  the guarded fire path + advancePlayheadPastChain); go() clears the
+  goToRepositionedPlayhead flag before EVERY fire and skips its generic
+  chain-advance only when the arm set it — a GoTo's own follows anchor to
+  ITS list position, never the jump target. ATS NSAllowsArbitraryLoads is
+  a DELIBERATE app-wide exemption (show gear speaks plain http on closed
+  LANs — documented in project.yml; don't "fix" it).
 - Video/camera/image/slide cues REQUIRE an output group (no implicit
   main-display target) — EXCEPT D25 `CameraBody.sensorOnly`: a camera cue
   running purely as a hand-gesture sensor draws to no output at all, so it
